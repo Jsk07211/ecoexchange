@@ -8,9 +8,12 @@ Citizen-science data exchange platform. Next.js frontend + FastAPI backend.
 docker compose up --build
 ```
 
-- Frontend: http://localhost:3000
-- Backend API: http://localhost:8000
-- API docs: http://localhost:8000/docs
+This starts three services:
+- **Frontend:** http://localhost:3000
+- **Backend API:** http://localhost:8000 (docs at `/docs`)
+- **PostgreSQL:** localhost:5432
+
+Tables are created and seeded with 6 programs + 6 datasets automatically on first startup. Data persists across restarts via a Docker volume (`pgdata`).
 
 ## API Endpoints
 
@@ -131,37 +134,91 @@ const response = await uploadFiles(selectedFiles)
 // response.results[0].accepted, .reason, .aiTags, .aiConfidence
 ```
 
+## Database
+
+PostgreSQL 16 is used for persistence via SQLAlchemy async + asyncpg.
+
+### Architecture
+
+```
+FastAPI routes  →  SQLAlchemy async (db_models.py)  →  PostgreSQL
+                   Pydantic (models/)               →  API response schemas
+```
+
+- **ORM models** (`backend/db_models.py`): `ProgramDB`, `DatasetDB`, `SubmissionDB`
+- **Pydantic schemas** (`backend/models/`): used for API request/response validation (unchanged)
+- **Seed data** (`backend/data/`): inserted on first startup if tables are empty
+- **No Alembic** -- tables are created via `create_all` on startup
+
+### Tables
+
+| Table | Purpose | Rows |
+|-------|---------|------|
+| `programs` | Citizen-science programs | 6 (seeded) |
+| `datasets` | Published datasets | 6 (seeded) |
+| `submissions` | User-submitted observations | grows over time |
+
+### Connection
+
+Default: `postgresql+asyncpg://eco:eco@db:5432/ecoexchange` (set via `DATABASE_URL` env var).
+
+To connect locally (e.g. with psql while Docker is running):
+
+```bash
+psql postgresql://eco:eco@localhost:5432/ecoexchange
+```
+
+### Reset the database
+
+```bash
+docker compose down -v   # deletes pgdata volume
+docker compose up --build  # recreates and re-seeds
+```
+
 ## Project Structure
 
 ```
 backend/
-  main.py              # FastAPI app, CORS, router includes
+  main.py              # FastAPI app, lifespan (create tables + seed), CORS
+  database.py          # Async engine, session factory, get_db dependency
+  db_models.py         # SQLAlchemy ORM models (ProgramDB, DatasetDB, SubmissionDB)
+  seed.py              # Seeds programs + datasets on first startup
   requirements.txt     # Python dependencies
-  models/              # Pydantic models
-  data/                # Hardcoded dummy data
+  models/              # Pydantic API schemas
+  data/                # Seed data (Python dicts)
   routes/              # API route handlers
-    uploads.py         # File upload + AI filter (edit _ai_filter here)
+    programs.py        # GET /api/programs, GET /api/programs/{id}
+    datasets.py        # GET /api/datasets, GET /api/datasets/{id}
+    submissions.py     # POST /api/submissions
+    uploads.py         # POST /api/uploads (AI filter)
 lib/
   types.ts             # Shared TypeScript interfaces
   api/                 # Typed fetch wrappers
 components/            # React components (fetch from API)
 ```
 
-## Local Development (without Docker)
+## Local Development
 
-Backend:
+### Option A: Full Docker (everything in containers)
 
 ```bash
-cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cd .. && uvicorn backend.main:app --reload
+docker compose up --build
 ```
 
-Frontend:
+### Option B: Local Python + Dockerized Postgres (recommended for dev)
 
 ```bash
+# Terminal 1 -- start Postgres
+docker compose up db
+
+# Terminal 2 -- run the backend with hot reload
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r backend/requirements.txt
+DATABASE_URL=postgresql+asyncpg://eco:eco@localhost:5432/ecoexchange \
+  uvicorn backend.main:app --reload
+
+# Terminal 3 -- run the frontend
 pnpm install
 pnpm dev
 ```

@@ -1,9 +1,30 @@
 services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: eco
+      POSTGRES_PASSWORD: eco
+      POSTGRES_DB: ecoexchange
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eco"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
   backend:
     build:
       context: ./backend
     ports:
       - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://eco:eco@db:5432/ecoexchange
+    depends_on:
+      db:
+        condition: service_healthy
 
   frontend:
     build:
@@ -14,3 +35,6 @@ services:
       - NEXT_PUBLIC_API_URL=http://localhost:8000
     depends_on:
       - backend
+
+volumes:
+  pgdata:

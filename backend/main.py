@@ -1,9 +1,25 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.routes import programs, datasets, submissions, uploads
+from backend.database import Base, async_session, engine
+from backend.db_models import DatasetDB, ProgramDB, SubmissionDB  # noqa: F401
+from backend.routes import datasets, programs, submissions, uploads
+from backend.seed import seed
 
-app = FastAPI(title="EcoExchange API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    async with async_session() as session:
+        await seed(session)
+    yield
+    await engine.dispose()
+
+
+app = FastAPI(title="EcoExchange API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

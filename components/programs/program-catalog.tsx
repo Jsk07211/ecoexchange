@@ -1,36 +1,40 @@
 "use client"
 
-import { useState } from "react"
-import { Search, MapPin, Users, Database, Calendar, Filter, X } from "lucide-react"
+import { useState, useEffect } from "react"
+import { Search, MapPin, Users, Database, Calendar, Filter, X, Loader2 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { programs, categories, statuses } from "@/lib/mock-data"
+import { getPrograms } from "@/lib/api/programs"
+import type { Program } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import Link from "next/link"
+
+const categories = ["All", "Biodiversity", "Water Quality", "Air Quality", "Climate"]
+const statuses = ["All", "Active", "Upcoming", "Completed"]
 
 export function ProgramCatalog() {
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedCategory, setSelectedCategory] = useState("All")
   const [selectedStatus, setSelectedStatus] = useState("All")
   const [showFilters, setShowFilters] = useState(false)
+  const [programs, setPrograms] = useState<Program[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
-  const filtered = programs.filter((program) => {
-    const matchesSearch =
-      searchQuery === "" ||
-      program.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      program.organization.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      program.description.toLowerCase().includes(searchQuery.toLowerCase())
+  useEffect(() => {
+    setLoading(true)
+    setError(null)
+    const params: Record<string, string> = {}
+    if (selectedCategory !== "All") params.category = selectedCategory
+    if (selectedStatus !== "All") params.status = selectedStatus.toLowerCase()
+    if (searchQuery) params.search = searchQuery
 
-    const matchesCategory =
-      selectedCategory === "All" || program.category === selectedCategory
-
-    const matchesStatus =
-      selectedStatus === "All" ||
-      program.status === selectedStatus.toLowerCase()
-
-    return matchesSearch && matchesCategory && matchesStatus
-  })
+    getPrograms(params)
+      .then(setPrograms)
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false))
+  }, [selectedCategory, selectedStatus, searchQuery])
 
   const hasActiveFilters = selectedCategory !== "All" || selectedStatus !== "All" || searchQuery !== ""
 
@@ -124,7 +128,7 @@ export function ProgramCatalog() {
       <div className="mx-auto max-w-7xl px-4 py-10 lg:px-8">
         <div className="mb-6 flex items-center justify-between">
           <p className="text-sm text-muted-foreground">
-            {filtered.length} program{filtered.length !== 1 ? "s" : ""} found
+            {loading ? "Loading..." : `${programs.length} program${programs.length !== 1 ? "s" : ""} found`}
           </p>
           {hasActiveFilters && (
             <Button
@@ -143,7 +147,18 @@ export function ProgramCatalog() {
           )}
         </div>
 
-        {filtered.length === 0 ? (
+        {loading ? (
+          <div className="flex justify-center py-12">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : error ? (
+          <div className="rounded-2xl border border-border bg-card p-12 text-center">
+            <p className="text-lg font-semibold text-foreground">
+              Failed to load programs
+            </p>
+            <p className="mt-2 text-sm text-muted-foreground">{error}</p>
+          </div>
+        ) : programs.length === 0 ? (
           <div className="rounded-2xl border border-border bg-card p-12 text-center">
             <p className="text-lg font-semibold text-foreground">
               No programs match your filters
@@ -165,7 +180,7 @@ export function ProgramCatalog() {
           </div>
         ) : (
           <div className="grid gap-6 md:grid-cols-2">
-            {filtered.map((program) => (
+            {programs.map((program) => (
               <div
                 key={program.id}
                 className="group flex flex-col rounded-2xl border border-border bg-card p-6 transition-all hover:border-primary/25 hover:shadow-sm"

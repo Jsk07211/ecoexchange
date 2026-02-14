@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import {
   CheckCircle2,
   MapPin,
@@ -10,6 +10,7 @@ import {
   AlertCircle,
   Info,
   Check,
+  Loader2,
 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -24,7 +25,9 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
-import { programs } from "@/lib/mock-data"
+import { getPrograms } from "@/lib/api/programs"
+import { submitObservation } from "@/lib/api/submissions"
+import type { Program } from "@/lib/types"
 
 const steps = [
   { id: 1, title: "Select Program", shortTitle: "Program" },
@@ -42,6 +45,7 @@ type ValidationResult = {
 export function SubmissionForm() {
   const [currentStep, setCurrentStep] = useState(1)
   const [submitted, setSubmitted] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
 
   const [selectedProgram, setSelectedProgram] = useState("")
   const [observationType, setObservationType] = useState("")
@@ -57,7 +61,15 @@ export function SubmissionForm() {
   const [habitat, setHabitat] = useState("")
   const [confidence, setConfidence] = useState("")
 
-  const activePrograms = programs.filter((p) => p.status === "active")
+  const [activePrograms, setActivePrograms] = useState<Program[]>([])
+  const [loadingPrograms, setLoadingPrograms] = useState(true)
+
+  useEffect(() => {
+    getPrograms({ status: "active" })
+      .then(setActivePrograms)
+      .catch(() => {})
+      .finally(() => setLoadingPrograms(false))
+  }, [])
 
   const handleGetLocation = () => {
     if (navigator.geolocation) {
@@ -74,6 +86,30 @@ export function SubmissionForm() {
     } else {
       setLatitude("40.7128")
       setLongitude("-74.0060")
+    }
+  }
+
+  const handleSubmit = async () => {
+    setSubmitting(true)
+    try {
+      await submitObservation({
+        selectedProgram,
+        observationType: observationType || undefined,
+        speciesName,
+        count,
+        notes: notes || undefined,
+        latitude,
+        longitude,
+        date,
+        time,
+        habitat: habitat || undefined,
+        confidence: confidence || undefined,
+      })
+      setSubmitted(true)
+    } catch {
+      // stay on review step so user can retry
+    } finally {
+      setSubmitting(false)
     }
   }
 
@@ -261,38 +297,44 @@ export function SubmissionForm() {
               </p>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-2">
-              {activePrograms.map((program) => (
-                <button
-                  key={program.id}
-                  onClick={() => setSelectedProgram(program.id)}
-                  className={cn(
-                    "flex flex-col rounded-xl border p-5 text-left transition-all",
-                    selectedProgram === program.id
-                      ? "border-primary bg-primary/5 ring-1 ring-primary"
-                      : "border-border bg-card hover:border-primary/30"
-                  )}
-                >
-                  <div className="flex items-center gap-2">
-                    <Badge variant="secondary" className="text-xs">
-                      {program.category}
-                    </Badge>
-                    {selectedProgram === program.id && (
-                      <Check className="ml-auto h-4 w-4 text-primary" />
+            {loadingPrograms ? (
+              <div className="flex justify-center py-12">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              </div>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2">
+                {activePrograms.map((program) => (
+                  <button
+                    key={program.id}
+                    onClick={() => setSelectedProgram(program.id)}
+                    className={cn(
+                      "flex flex-col rounded-xl border p-5 text-left transition-all",
+                      selectedProgram === program.id
+                        ? "border-primary bg-primary/5 ring-1 ring-primary"
+                        : "border-border bg-card hover:border-primary/30"
                     )}
-                  </div>
-                  <p className="mt-3 font-semibold text-foreground">
-                    {program.title}
-                  </p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {program.organization}
-                  </p>
-                  <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
-                    {program.description}
-                  </p>
-                </button>
-              ))}
-            </div>
+                  >
+                    <div className="flex items-center gap-2">
+                      <Badge variant="secondary" className="text-xs">
+                        {program.category}
+                      </Badge>
+                      {selectedProgram === program.id && (
+                        <Check className="ml-auto h-4 w-4 text-primary" />
+                      )}
+                    </div>
+                    <p className="mt-3 font-semibold text-foreground">
+                      {program.title}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {program.organization}
+                    </p>
+                    <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+                      {program.description}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -681,7 +723,8 @@ export function SubmissionForm() {
               <ChevronRight className="ml-2 h-4 w-4" />
             </Button>
           ) : (
-            <Button onClick={() => setSubmitted(true)}>
+            <Button onClick={handleSubmit} disabled={submitting}>
+              {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Submit Observation
             </Button>
           )}

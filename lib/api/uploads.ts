@@ -1,0 +1,47 @@
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+
+export interface UploadFilterResult {
+  filename: string
+  fileType: "pdf" | "image" | "csv" | "unknown"
+  size: number
+  accepted: boolean
+  reason: string | null
+  aiTags: string[]
+  aiConfidence: number | null
+}
+
+export interface UploadResponse {
+  totalFiles: number
+  accepted: number
+  rejected: number
+  results: UploadFilterResult[]
+}
+
+export async function uploadFiles(files: File[]): Promise<UploadResponse> {
+  const formData = new FormData()
+  for (const file of files) {
+    formData.append("files", file)
+  }
+
+  const res = await fetch(`${API_BASE}/api/uploads`, {
+    method: "POST",
+    body: formData,
+  })
+  if (!res.ok) throw new Error(`Upload failed: ${res.status}`)
+
+  const data = await res.json()
+  return {
+    totalFiles: data.total_files,
+    accepted: data.accepted,
+    rejected: data.rejected,
+    results: data.results.map((r: Record<string, unknown>) => ({
+      filename: r.filename,
+      fileType: r.file_type,
+      size: r.size,
+      accepted: r.accepted,
+      reason: r.reason,
+      aiTags: r.ai_tags,
+      aiConfidence: r.ai_confidence,
+    })),
+  }
+}

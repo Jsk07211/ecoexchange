@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import {
   Search,
   Download,
@@ -12,16 +12,27 @@ import {
   ExternalLink,
   Filter,
   X,
+  Loader2,
 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
-import { datasets, categories } from "@/lib/mock-data"
+import { getDatasets } from "@/lib/api/datasets"
+import type { Dataset } from "@/lib/types"
 import { cn } from "@/lib/utils"
+
+const categories = ["All", "Biodiversity", "Water Quality", "Air Quality", "Climate"]
 
 type SortField = "lastUpdated" | "qualityScore" | "downloads" | "records"
 type SortDir = "asc" | "desc"
+
+const sortFieldToApi: Record<SortField, string> = {
+  lastUpdated: "last_updated",
+  qualityScore: "quality_score",
+  downloads: "downloads",
+  records: "records",
+}
 
 export function DatasetBrowser() {
   const [searchQuery, setSearchQuery] = useState("")
@@ -30,31 +41,25 @@ export function DatasetBrowser() {
   const [sortDir, setSortDir] = useState<SortDir>("desc")
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [showFilters, setShowFilters] = useState(false)
+  const [datasets, setDatasets] = useState<Dataset[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
-  const filtered = datasets
-    .filter((ds) => {
-      const matchesSearch =
-        searchQuery === "" ||
-        ds.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        ds.organization.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        ds.description.toLowerCase().includes(searchQuery.toLowerCase())
+  useEffect(() => {
+    setLoading(true)
+    setError(null)
+    const params: Record<string, string> = {
+      sort_by: sortFieldToApi[sortField],
+      sort_dir: sortDir,
+    }
+    if (selectedCategory !== "All") params.category = selectedCategory
+    if (searchQuery) params.search = searchQuery
 
-      const matchesCategory =
-        selectedCategory === "All" || ds.category === selectedCategory
-
-      return matchesSearch && matchesCategory
-    })
-    .sort((a, b) => {
-      const multiplier = sortDir === "desc" ? -1 : 1
-      if (sortField === "lastUpdated") {
-        return (
-          multiplier *
-          (new Date(a.lastUpdated).getTime() -
-            new Date(b.lastUpdated).getTime())
-        )
-      }
-      return multiplier * (a[sortField] - b[sortField])
-    })
+    getDatasets(params)
+      .then(setDatasets)
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false))
+  }, [selectedCategory, searchQuery, sortField, sortDir])
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -174,8 +179,7 @@ export function DatasetBrowser() {
       <div className="mx-auto max-w-7xl px-4 py-10 lg:px-8">
         <div className="mb-6 flex items-center justify-between">
           <p className="text-sm text-muted-foreground">
-            {filtered.length} dataset{filtered.length !== 1 ? "s" : ""}{" "}
-            available
+            {loading ? "Loading..." : `${datasets.length} dataset${datasets.length !== 1 ? "s" : ""} available`}
           </p>
           {hasActiveFilters && (
             <Button
@@ -193,7 +197,18 @@ export function DatasetBrowser() {
           )}
         </div>
 
-        {filtered.length === 0 ? (
+        {loading ? (
+          <div className="flex justify-center py-12">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : error ? (
+          <div className="rounded-2xl border border-border bg-card p-12 text-center">
+            <p className="text-lg font-semibold text-foreground">
+              Failed to load datasets
+            </p>
+            <p className="mt-2 text-sm text-muted-foreground">{error}</p>
+          </div>
+        ) : datasets.length === 0 ? (
           <div className="rounded-2xl border border-border bg-card p-12 text-center">
             <p className="text-lg font-semibold text-foreground">
               No datasets match your criteria
@@ -214,7 +229,7 @@ export function DatasetBrowser() {
           </div>
         ) : (
           <div className="flex flex-col gap-4">
-            {filtered.map((ds) => (
+            {datasets.map((ds) => (
               <div
                 key={ds.id}
                 className="rounded-2xl border border-border bg-card transition-all hover:border-primary/20"

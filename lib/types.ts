@@ -121,3 +121,127 @@ export interface SubmissionResponse extends Submission {
   id: string
   submittedAt: string
 }
+
+export type VisualizationChartType =
+  | "table"
+  | "line"
+  | "bar"
+  | "area"
+  | "scatter"
+  | "pie"
+  | "histogram"
+  | "violin"
+  | "scatter_matrix"
+  | "stat_card"
+  | "map"
+  | "note"
+  | "grouped_bar"
+  | "stacked_bar"
+  | "stacked_area"
+  | "heatmap"
+  | "box_plot"
+  | "bubble"
+  | "radar"
+  | "sunburst"
+
+export type VisualizationAggregateMethod =
+  | "raw"
+  | "count"
+  | "sum"
+  | "mean"
+  | "avg"
+  | "min"
+  | "max"
+  | "median"
+  | "mode"
+  | "distinct"
+
+export interface VisualizationMetric {
+  field: string
+  aggregate: VisualizationAggregateMethod
+  color?: string
+  legendLabel?: string
+}
+
+export type TileFilterOperator =
+  | "eq"
+  | "neq"
+  | "contains"
+  | "not_contains"
+  | "in"
+  | "not_in"
+  | "gt"
+  | "lt"
+  | "gte"
+  | "lte"
+  | "between"
+  | "before"
+  | "after"
+  | "date_between"
+
+export interface VisualizationTileFilter {
+  id: string
+  field: string
+  operator: TileFilterOperator
+  value?: string
+  values?: string[]
+  min?: string
+  max?: string
+}
+
+export interface VisualizationWidget {
+  id: string
+  title: string
+  table: string
+  chartType: VisualizationChartType
+  valueMode?: "raw" | "measures"
+  xField?: string
+  yField?: string
+  metrics: VisualizationMetric[]
+  groupField?: string
+  matrixFields?: string[]
+  latField?: string
+  lngField?: string
+  noteContent?: string
+  sizeField?: string // For bubble charts
+  categoryField?: string // For sunburst, radar
+  stackMode?: "grouped" | "stacked" // For grouped/stacked bar/area
+  xAxisLabel?: string
+  yAxisLabel?: string
+  showLegend?: boolean
+  colorByCategory?: boolean
+  categoryColors?: Record<string, string>
+  filters?: VisualizationTileFilter[]
+  tileWidth?: 1 | 2 | 3
+  tileHeight?: "sm" | "md" | "lg"
+  layoutX?: number
+  layoutY?: number
+  layoutW?: number
+  layoutH?: number
+}
+
+export interface VisualizationGlobalFilter {
+  id: string
+  table: string
+  field: string
+  operator: "between" | "eq" | "contains" | "gte" | "lte"
+  value?: string
+  startDate?: string
+  endDate?: string
+  startValue?: string
+  endValue?: string
+}
+
+export interface VisualizationConfig {
+  widgets: VisualizationWidget[]
+  globalFilters?: VisualizationGlobalFilter[]
+}
+
+export interface Visualization {
+  id: string
+  programId: string
+  name: string
+  description?: string
+  config: VisualizationConfig
+  createdAt: string
+}

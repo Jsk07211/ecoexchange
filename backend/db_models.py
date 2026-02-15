@@ -70,3 +70,14 @@ class SubmissionDB(Base):
     habitat: Mapped[str | None] = mapped_column(String, nullable=True)
     confidence: Mapped[str | None] = mapped_column(String, nullable=True)
     submitted_at: Mapped[str] = mapped_column(String, nullable=False)
+
+
+class VisualizationDB(Base):
+    __tablename__ = "visualizations"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    program_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    config: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[str] = mapped_column(String, nullable=False)

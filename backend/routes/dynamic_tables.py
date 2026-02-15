@@ -5,9 +5,12 @@ from datetime import date, datetime
 
 import asyncpg
 from fastapi import APIRouter, HTTPException
+from sqlalchemy import update
 
 from pydantic import BaseModel
 
+from backend.database import async_session
+from backend.db_models import ProgramDB
 from backend.models.dynamic_table import DynamicTableRequest
 
 router = APIRouter(prefix="/api", tags=["dynamic-tables"])
@@ -265,6 +268,23 @@ def _coerce_row(data: dict, valid_columns: set[str], table: str) -> dict:
     return row
 
 
+async def _increment_program_writes(project: str, table: str, by: int) -> None:
+    if by <= 0:
+        return
+    try:
+        async with async_session() as session:
+            await session.execute(
+                update(ProgramDB)
+                .where(ProgramDB.project_name == project)
+                .where(ProgramDB.table_name == table)
+                .values(participants=ProgramDB.participants + by)
+            )
+            await session.commit()
+    except Exception:
+        # Do not fail data writes if metrics backfill/update fails.
+        pass
+
+
 @router.post("/tables/{project}/{table}/rows")
 async def insert_row(project: str, table: str, body: _SingleRowBody):
     """Insert a single row into a dynamic table."""
@@ -295,6 +315,7 @@ async def insert_row(project: str, table: str, body: _SingleRowBody):
     finally:
         await conn.close()
 
+    await _increment_program_writes(project, table, 1)
     return {"status": "ok", "row": _serialize_row(record)}
 
 
@@ -357,4 +378,5 @@ async def insert_rows_batch(project: str, table: str, body: _BatchRowsBody):
     finally:
         await conn.close()
 
+    await _increment_program_writes(project, table, 1)
     return {"status": "ok", "count": len(coerced)}

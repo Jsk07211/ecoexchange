@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, type ChangeEvent } from "react"
 import {
   CheckCircle2,
   ChevronRight,
@@ -34,6 +34,7 @@ import { cn } from "@/lib/utils"
 import { createTable } from "@/lib/api/tables"
 import { createProgram } from "@/lib/api/programs"
 import { Textarea } from "@/components/ui/textarea"
+import * as XLSX from "xlsx"
 import type {
   FieldType,
   FieldDefinition,
@@ -55,6 +56,51 @@ interface TableDef {
   cnnFilter: string
 }
 
+const DATE_RE = /^\d{4}[-/]\d{1,2}[-/]\d{1,2}$|^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}$/
+const IMAGE_RE = /^https?:\/\/.+\.(png|jpe?g|gif|webp|bmp|svg)$/i
+
+function inferFieldType(values: string[]): FieldType {
+  const nonEmpty = values.map((v) => v.trim()).filter(Boolean)
+  if (nonEmpty.length === 0) return "STRING"
+
+  if (nonEmpty.every((v) => IMAGE_RE.test(v))) return "IMAGE"
+
+  if (nonEmpty.some((v) => v.length > 120 || v.includes("\n"))) return "TEXT"
+
+  const boolValues = new Set(["true", "false", "yes", "no"])
+  if (nonEmpty.every((v) => boolValues.has(v.toLowerCase()))) return "BOOLEAN"
+
+  if (nonEmpty.every((v) => /^-?\d+$/.test(v))) return "INT"
+
+  if (
+    nonEmpty.every((v) => !Number.isNaN(Number(v)) && /^-?\d+(\.\d+)?$/.test(v))
+  ) {
+    return "FLOAT"
+  }
+
+  if (
+    nonEmpty.every(
+      (v) =>
+        DATE_RE.test(v) ||
+        (!Number.isNaN(Date.parse(v)) && /[-/]|t/i.test(v))
+    )
+  ) {
+    return "DATE"
+  }
+
+  return "STRING"
+}
+
+function dedupeHeaders(headers: string[]): string[] {
+  const used = new Map<string, number>()
+  return headers.map((h, idx) => {
+    const base = h.trim() || `column_${idx + 1}`
+    const seen = used.get(base) ?? 0
+    used.set(base, seen + 1)
+    return seen === 0 ? base : `${base}_${seen + 1}`
+  })
+}
+
 export function CreateForm() {
   const [currentStep, setCurrentStep] = useState(1)
   const [completed, setCompleted] = useState(false)
@@ -71,6 +117,7 @@ export function CreateForm() {
     { name: "", fields: [{ name: "", type: "STRING" }], cnnFilter: "" },
   ])
   const [tableResponses, setTableResponses] = useState<DynamicTableResponse[]>([])
+  const [importingTable, setImportingTable] = useState<number | null>(null)
 
   const addTable = () => {
     setTables([...tables, { name: "", fields: [{ name: "", type: "STRING" }], cnnFilter: "" }])
@@ -124,6 +171,70 @@ export function CreateForm() {
     fields[fieldIndex] = { ...fields[fieldIndex], type }
     updated[tableIndex] = { ...updated[tableIndex], fields }
     setTables(updated)
+  }
+
+  const importSchemaFromFile = async (
+    tableIndex: number,
+    e: ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0]
+    e.target.value = ""
+    if (!file) return
+
+    setImportingTable(tableIndex)
+    setError("")
+    try {
+      const data = await file.arrayBuffer()
+      const workbook = XLSX.read(data, { type: "array" })
+      const sheetName = workbook.SheetNames[0]
+      if (!sheetName) {
+        setError("The selected file has no sheets.")
+        return
+      }
+
+      const sheet = workbook.Sheets[sheetName]
+      const rows = XLSX.utils.sheet_to_json<(string | number | boolean)[]>(sheet, {
+        header: 1,
+        raw: false,
+        defval: "",
+      })
+
+      if (rows.length === 0) {
+        setError("The selected file is empty.")
+        return
+      }
+
+      const headers = dedupeHeaders(rows[0].map((v) => String(v)))
+      if (headers.every((h) => !h.trim())) {
+        setError("Could not detect headers in the first row.")
+        return
+      }
+
+      const sampleRows = rows.slice(1, 101)
+      const inferredFields: FieldDefinition[] = headers.map((header, colIdx) => {
+        const values = sampleRows
+          .map((row) => row[colIdx])
+          .filter((v) => v !== undefined && v !== null)
+          .map((v) => String(v))
+
+        return { name: header, type: inferFieldType(values) }
+      })
+
+      const updated = [...tables]
+      updated[tableIndex] = {
+        ...updated[tableIndex],
+        fields: inferredFields.length > 0 ? inferredFields : [{ name: "", type: "STRING" }],
+      }
+      if (!updated[tableIndex].name.trim()) {
+        const inferredName = file.name.replace(/\.[^.]+$/, "")
+        updated[tableIndex].name = inferredName
+      }
+      setTables(updated)
+    } catch {
+      setError("Failed to parse file. Please upload a valid CSV or Excel file.")
+    } finally {
+      setImportingTable(null)
+    }
   }
 
   // Sanitize a user-entered name into a valid SQL identifier
@@ -440,6 +551,21 @@ export function CreateForm() {
                       <Trash2 className="h-4 w-4 text-muted-foreground" />
                     </Button>
                   )}
+                </div>
+                <div className="pl-7">
+                  <Label className="text-xs text-muted-foreground">
+                    Auto-populate from CSV/Excel
+                  </Label>
+                  <Input
+                    type="file"
+                    accept=".csv,.xlsx,.xls"
+                    disabled={importingTable === tIdx}
+                    onChange={(e) => void importSchemaFromFile(tIdx, e)}
+                    className="mt-1 h-9 text-xs"
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Uses first row as column names and infers types from up to 100 rows.
+                  </p>
                 </div>
 
                 <div className="space-y-2 pl-7">

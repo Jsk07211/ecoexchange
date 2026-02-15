@@ -121,14 +121,28 @@ export default function ProgramDetailPage() {
               {program.organization}
             </p>
           </div>
-          {program.contributionSpec && (
-            <Button asChild>
-              <Link href={`/programs/${id}/contribute`}>
-                <Upload className="mr-2 h-4 w-4" />
-                Contribute
+          <div className="flex flex-col gap-2">
+            {program.contributionSpec && (
+              <Button asChild>
+                <Link href={`/programs/${id}/contribute`}>
+                  <Upload className="mr-2 h-4 w-4" />
+                  Contribute
+                </Link>
+              </Button>
+            )}
+            <Button variant="outline" asChild>
+              <Link href={`/programs/${id}/visualize`}>
+                <Database className="mr-2 h-4 w-4" />
+                Visualize
               </Link>
             </Button>
-          )}
+            <Button variant="outline" asChild>
+              <Link href={`/programs/${id}/visualizations`}>
+                <Database className="mr-2 h-4 w-4" />
+                Saved Visualizations
+              </Link>
+            </Button>
+          </div>
         </div>
         <p className="mt-3 max-w-3xl text-base leading-relaxed text-muted-foreground">
           {program.description}
@@ -205,6 +219,7 @@ export default function ProgramDetailPage() {
           )}
         </div>
       )}
+
     </div>
   )
 }

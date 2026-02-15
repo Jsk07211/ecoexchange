@@ -49,6 +49,11 @@ const steps = [
 
 const fieldTypes: FieldType[] = ["STRING", "INT", "FLOAT", "BOOLEAN", "DATE", "TEXT", "IMAGE"]
 
+interface TableDef {
+  name: string
+  fields: FieldDefinition[]
+}
+
 export function CreateForm() {
   const [currentStep, setCurrentStep] = useState(1)
   const [completed, setCompleted] = useState(false)
@@ -57,36 +62,61 @@ export function CreateForm() {
 
   // Step 1 state
   const [programName, setProgramName] = useState("")
-  const [tableName, setTableName] = useState("")
   const [organization, setOrganization] = useState("")
   const [category, setCategory] = useState("Biodiversity")
   const [description, setDescription] = useState("")
   const [location, setLocation] = useState("")
-  const [fields, setFields] = useState<FieldDefinition[]>([
-    { name: "", type: "STRING" },
+  const [tables, setTables] = useState<TableDef[]>([
+    { name: "", fields: [{ name: "", type: "STRING" }] },
   ])
-  const [tableResponse, setTableResponse] =
-    useState<DynamicTableResponse | null>(null)
+  const [tableResponses, setTableResponses] = useState<DynamicTableResponse[]>([])
 
-
-  const addField = () => {
-    setFields([...fields, { name: "", type: "STRING" }])
+  const addTable = () => {
+    setTables([...tables, { name: "", fields: [{ name: "", type: "STRING" }] }])
   }
 
-  const removeField = (index: number) => {
-    setFields(fields.filter((_, i) => i !== index))
+  const removeTable = (tableIndex: number) => {
+    setTables(tables.filter((_, i) => i !== tableIndex))
   }
 
-  const updateFieldName = (index: number, name: string) => {
-    const updated = [...fields]
-    updated[index] = { ...updated[index], name }
-    setFields(updated)
+  const updateTableName = (tableIndex: number, name: string) => {
+    const updated = [...tables]
+    updated[tableIndex] = { ...updated[tableIndex], name }
+    setTables(updated)
   }
 
-  const updateFieldType = (index: number, type: FieldType) => {
-    const updated = [...fields]
-    updated[index] = { ...updated[index], type }
-    setFields(updated)
+  const addField = (tableIndex: number) => {
+    const updated = [...tables]
+    updated[tableIndex] = {
+      ...updated[tableIndex],
+      fields: [...updated[tableIndex].fields, { name: "", type: "STRING" }],
+    }
+    setTables(updated)
+  }
+
+  const removeField = (tableIndex: number, fieldIndex: number) => {
+    const updated = [...tables]
+    updated[tableIndex] = {
+      ...updated[tableIndex],
+      fields: updated[tableIndex].fields.filter((_, i) => i !== fieldIndex),
+    }
+    setTables(updated)
+  }
+
+  const updateFieldName = (tableIndex: number, fieldIndex: number, name: string) => {
+    const updated = [...tables]
+    const fields = [...updated[tableIndex].fields]
+    fields[fieldIndex] = { ...fields[fieldIndex], name }
+    updated[tableIndex] = { ...updated[tableIndex], fields }
+    setTables(updated)
+  }
+
+  const updateFieldType = (tableIndex: number, fieldIndex: number, type: FieldType) => {
+    const updated = [...tables]
+    const fields = [...updated[tableIndex].fields]
+    fields[fieldIndex] = { ...fields[fieldIndex], type }
+    updated[tableIndex] = { ...updated[tableIndex], fields }
+    setTables(updated)
   }
 
   // Sanitize a user-entered name into a valid SQL identifier
@@ -98,50 +128,74 @@ export function CreateForm() {
     setError("")
     try {
       const safeProject = sanitize(programName)
-      const safeTable = sanitize(tableName)
-      if (!safeProject || !safeTable) {
-        setError("Program and table names are required.")
+      if (!safeProject) {
+        setError("Program name is required.")
         setLoading(false)
         return
       }
 
-      const validFields = fields.filter((f) => f.name.trim())
-      const acceptImages = validFields.some((f) => f.type === "IMAGE")
-      // Sanitize field names — IMAGE fields become TEXT (they store URLs)
-      const sanitizedFields = validFields.map((f) => ({
-        ...f,
-        name: sanitize(f.name) || f.name.trim(),
-      }))
+      // Validate all tables have names and at least one field
+      for (let i = 0; i < tables.length; i++) {
+        const safeTable = sanitize(tables[i].name)
+        if (!safeTable) {
+          setError(`Table ${i + 1} needs a name.`)
+          setLoading(false)
+          return
+        }
+        if (!tables[i].fields.some((f) => f.name.trim())) {
+          setError(`Table "${tables[i].name}" needs at least one field.`)
+          setLoading(false)
+          return
+        }
+      }
+
+      // Collect all fields across all tables for the contribution spec
+      const allFields: FieldDefinition[] = []
+      const acceptImages = tables.some((t) =>
+        t.fields.some((f) => f.type === "IMAGE")
+      )
+
+      // Create all tables
+      const tablePromises = tables.map((t) => {
+        const validFields = t.fields.filter((f) => f.name.trim())
+        const sanitizedFields = validFields.map((f) => ({
+          ...f,
+          name: sanitize(f.name) || f.name.trim(),
+        }))
+        allFields.push(...sanitizedFields)
+        return createTable({
+          projectName: safeProject,
+          tableName: sanitize(t.name),
+          fields: sanitizedFields,
+        })
+      })
 
       const title = programName
         .trim()
         .replace(/\b\w/g, (c) => c.toUpperCase())
 
-      // Create one table with all fields (IMAGE → TEXT in backend)
-      const [res] = await Promise.all([
-        createTable({
-          projectName: safeProject,
-          tableName: safeTable,
-          fields: sanitizedFields,
-        }),
+      const primaryTable = sanitize(tables[0].name)
+
+      const [responses] = await Promise.all([
+        Promise.all(tablePromises),
         createProgram({
           title,
           organization,
           category,
           description,
           location,
-          tags: sanitizedFields.filter((f) => f.type !== "IMAGE").map((f) => f.name),
+          tags: allFields.filter((f) => f.type !== "IMAGE").map((f) => f.name),
           projectName: safeProject,
-          tableName: safeTable,
+          tableName: primaryTable,
           acceptedFiles: acceptImages ? ["image", "csv"] : ["csv"],
-          fields: sanitizedFields,
+          fields: allFields,
         }),
       ])
-      setTableResponse(res)
+      setTableResponses(responses)
 
       setCurrentStep(2)
     } catch {
-      setError("Failed to create table. Check that names use only letters, digits, and underscores.")
+      setError("Failed to create tables. Check that names use only letters, digits, and underscores.")
     } finally {
       setLoading(false)
     }
@@ -149,8 +203,8 @@ export function CreateForm() {
 
   const canContinue =
     programName.trim() &&
-    tableName.trim() &&
-    fields.some((f) => f.name.trim())
+    tables.every((t) => t.name.trim()) &&
+    tables.every((t) => t.fields.some((f) => f.name.trim()))
 
   if (completed) {
     return (
@@ -172,16 +226,16 @@ export function CreateForm() {
               <dt className="text-muted-foreground">Program</dt>
               <dd className="font-medium text-foreground">{programName}</dd>
             </div>
-            <div className="flex justify-between">
-              <dt className="text-muted-foreground">Table</dt>
-              <dd className="font-medium text-foreground">{tableName}</dd>
-            </div>
-            <div className="flex justify-between">
-              <dt className="text-muted-foreground">Columns</dt>
-              <dd className="font-medium text-foreground">
-                {fields.filter((f) => f.name.trim()).length} fields
-              </dd>
-            </div>
+            {tables.map((t, i) => (
+              <div key={i} className="flex justify-between">
+                <dt className="text-muted-foreground">
+                  {tables.length > 1 ? `Table ${i + 1}` : "Table"}
+                </dt>
+                <dd className="font-medium text-foreground">
+                  {t.name} ({t.fields.filter((f) => f.name.trim()).length} fields)
+                </dd>
+              </div>
+            ))}
           </dl>
         </div>
         <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
@@ -190,13 +244,12 @@ export function CreateForm() {
               setCompleted(false)
               setCurrentStep(1)
               setProgramName("")
-              setTableName("")
               setOrganization("")
               setCategory("Biodiversity")
               setDescription("")
               setLocation("")
-              setFields([{ name: "", type: "STRING" }])
-              setTableResponse(null)
+              setTables([{ name: "", fields: [{ name: "", type: "STRING" }] }])
+              setTableResponses([])
               setError("")
             }}
           >
@@ -282,37 +335,20 @@ export function CreateForm() {
               </p>
             </div>
 
-            <div className="grid gap-6 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="program-name">
-                  {"Program Name "}
-                  <span className="text-destructive">*</span>
-                </Label>
-                <Input
-                  id="program-name"
-                  placeholder="e.g. Wildlife Tracking"
-                  value={programName}
-                  onChange={(e) => setProgramName(e.target.value)}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Spaces are fine — names are auto-formatted
-                </p>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="table-name">
-                  {"Table Name "}
-                  <span className="text-destructive">*</span>
-                </Label>
-                <Input
-                  id="table-name"
-                  placeholder="e.g. sightings"
-                  value={tableName}
-                  onChange={(e) => setTableName(e.target.value)}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Spaces are fine — names are auto-formatted
-                </p>
-              </div>
+            <div className="space-y-2">
+              <Label htmlFor="program-name">
+                {"Program Name "}
+                <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                id="program-name"
+                placeholder="e.g. Wildlife Tracking"
+                value={programName}
+                onChange={(e) => setProgramName(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Spaces are fine — names are auto-formatted
+              </p>
             </div>
 
             <div className="grid gap-6 sm:grid-cols-2">
@@ -365,71 +401,86 @@ export function CreateForm() {
               />
             </div>
 
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <Label>Fields</Label>
-                <Button variant="outline" size="sm" onClick={addField}>
-                  <Plus className="mr-2 h-4 w-4" />
-                  Add Field
-                </Button>
-              </div>
-
-              <div className="space-y-2">
-                {fields.map((field, index) => (
-                  <div
-                    key={index}
-                    className="flex items-center gap-2 rounded-lg border border-border bg-card p-3"
-                  >
-                    <Input
-                      placeholder="Field name (e.g. species)"
-                      value={field.name}
-                      onChange={(e) => updateFieldName(index, e.target.value)}
-                      className="flex-1"
-                    />
-                    <Select
-                      value={field.type}
-                      onValueChange={(v) =>
-                        updateFieldType(index, v as FieldType)
-                      }
-                    >
-                      <SelectTrigger className="w-36">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {fieldTypes.map((t) => (
-                          <SelectItem key={t} value={t}>
-                            {t}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+            {/* Tables */}
+            {tables.map((table, tIdx) => (
+              <div
+                key={tIdx}
+                className="space-y-3 rounded-xl border border-border bg-card/50 p-4"
+              >
+                <div className="flex items-center gap-3">
+                  <Database className="h-4 w-4 text-primary shrink-0" />
+                  <Input
+                    placeholder="Table name (e.g. sightings)"
+                    value={table.name}
+                    onChange={(e) => updateTableName(tIdx, e.target.value)}
+                    className="flex-1"
+                  />
+                  {tables.length > 1 && (
                     <Button
                       variant="ghost"
                       size="icon"
-                      onClick={() => removeField(index)}
-                      disabled={fields.length === 1}
+                      onClick={() => removeTable(tIdx)}
                     >
                       <Trash2 className="h-4 w-4 text-muted-foreground" />
                     </Button>
-                  </div>
-                ))}
-              </div>
-            </div>
+                  )}
+                </div>
 
-            {tableResponse && (
-              <div className="rounded-xl border border-border bg-card p-5">
-                <p className="text-sm font-semibold text-foreground">
-                  Table Created
-                </p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {tableResponse.columns.map((col) => (
-                    <Badge key={col} variant="secondary" className="text-xs">
-                      {col}
-                    </Badge>
+                <div className="space-y-2 pl-7">
+                  {table.fields.map((field, fIdx) => (
+                    <div
+                      key={fIdx}
+                      className="flex items-center gap-2 rounded-lg border border-border bg-card p-3"
+                    >
+                      <Input
+                        placeholder="Field name (e.g. species)"
+                        value={field.name}
+                        onChange={(e) => updateFieldName(tIdx, fIdx, e.target.value)}
+                        className="flex-1"
+                      />
+                      <Select
+                        value={field.type}
+                        onValueChange={(v) =>
+                          updateFieldType(tIdx, fIdx, v as FieldType)
+                        }
+                      >
+                        <SelectTrigger className="w-36">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {fieldTypes.map((t) => (
+                            <SelectItem key={t} value={t}>
+                              {t}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => removeField(tIdx, fIdx)}
+                        disabled={table.fields.length === 1}
+                      >
+                        <Trash2 className="h-4 w-4 text-muted-foreground" />
+                      </Button>
+                    </div>
                   ))}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => addField(tIdx)}
+                  >
+                    <Plus className="mr-2 h-4 w-4" />
+                    Add Field
+                  </Button>
                 </div>
               </div>
-            )}
+            ))}
+
+            <Button variant="outline" onClick={addTable} className="w-full">
+              <Plus className="mr-2 h-4 w-4" />
+              Add Another Table
+            </Button>
 
             {error && (
               <p className="text-sm text-destructive">{error}</p>
@@ -438,75 +489,87 @@ export function CreateForm() {
         )}
 
         {/* Step 2: Table Preview */}
-        {currentStep === 2 && tableResponse && (
+        {currentStep === 2 && tableResponses.length > 0 && (
           <div className="space-y-6">
             <div>
               <h2 className="font-serif text-xl font-semibold text-foreground">
-                Table Created
+                {tableResponses.length > 1 ? "Tables Created" : "Table Created"}
               </h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                Here's what your table looks like. Contributors will see this when viewing data.
+                Here{`'`}s what your {tableResponses.length > 1 ? "tables look" : "table looks"} like. Contributors will see this when viewing data.
               </p>
             </div>
 
-            {/* Table header bar (like DynamicTableViewer) */}
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="flex items-center gap-2">
-                <Database className="h-5 w-5 text-primary" />
-                <h3 className="font-serif text-xl font-semibold text-foreground">
-                  {tableResponse.database}
-                  <span className="text-muted-foreground"> / </span>
-                  {tableResponse.table}
-                </h3>
-              </div>
-              <Badge variant="secondary" className="ml-auto">0 rows</Badge>
-              <Badge variant="outline">
-                {fields.filter((f) => f.name.trim()).length + 2} columns
-              </Badge>
-            </div>
+            {tableResponses.map((resp, rIdx) => {
+              const tableDef = tables[rIdx]
+              const validFields = tableDef?.fields.filter((f) => f.name.trim()) ?? []
+              return (
+                <div key={rIdx} className="space-y-4">
+                  {/* Table header bar */}
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex items-center gap-2">
+                      <Database className="h-5 w-5 text-primary" />
+                      <h3 className="font-serif text-xl font-semibold text-foreground">
+                        {resp.database}
+                        <span className="text-muted-foreground"> / </span>
+                        {resp.table}
+                      </h3>
+                    </div>
+                    <Badge variant="secondary" className="ml-auto">0 rows</Badge>
+                    <Badge variant="outline">
+                      {validFields.length + 2} columns
+                    </Badge>
+                  </div>
 
-            {/* Schema chips */}
-            <div className="flex flex-wrap gap-2">
-              <div className="flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-xs">
-                <span className="font-medium text-foreground">id</span>
-                <span className="text-muted-foreground">int</span>
-              </div>
-              {fields.filter((f) => f.name.trim()).map((f) => (
-                <div key={f.name} className="flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-xs">
-                  <span className="font-medium text-foreground">{sanitize(f.name) || f.name}</span>
-                  <span className="text-muted-foreground">{f.type === "IMAGE" ? "image" : f.type.toLowerCase()}</span>
-                </div>
-              ))}
-              <div className="flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-xs">
-                <span className="font-medium text-foreground">created_at</span>
-                <span className="text-muted-foreground">timestamp</span>
-              </div>
-            </div>
-
-            {/* Empty table preview */}
-            <div className="rounded-xl border border-border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>id</TableHead>
-                    {fields.filter((f) => f.name.trim()).map((f) => (
-                      <TableHead key={f.name}>{sanitize(f.name) || f.name}</TableHead>
+                  {/* Schema chips */}
+                  <div className="flex flex-wrap gap-2">
+                    <div className="flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-xs">
+                      <span className="font-medium text-foreground">id</span>
+                      <span className="text-muted-foreground">int</span>
+                    </div>
+                    {validFields.map((f) => (
+                      <div key={f.name} className="flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-xs">
+                        <span className="font-medium text-foreground">{sanitize(f.name) || f.name}</span>
+                        <span className="text-muted-foreground">{f.type === "IMAGE" ? "image" : f.type.toLowerCase()}</span>
+                      </div>
                     ))}
-                    <TableHead>created_at</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  <TableRow>
-                    <TableCell
-                      colSpan={fields.filter((f) => f.name.trim()).length + 2}
-                      className="py-12 text-center text-muted-foreground"
-                    >
-                      No data yet.
-                    </TableCell>
-                  </TableRow>
-                </TableBody>
-              </Table>
-            </div>
+                    <div className="flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1 text-xs">
+                      <span className="font-medium text-foreground">created_at</span>
+                      <span className="text-muted-foreground">timestamp</span>
+                    </div>
+                  </div>
+
+                  {/* Empty table preview */}
+                  <div className="rounded-xl border border-border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>id</TableHead>
+                          {validFields.map((f) => (
+                            <TableHead key={f.name}>{sanitize(f.name) || f.name}</TableHead>
+                          ))}
+                          <TableHead>created_at</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        <TableRow>
+                          <TableCell
+                            colSpan={validFields.length + 2}
+                            className="py-12 text-center text-muted-foreground"
+                          >
+                            No data yet.
+                          </TableCell>
+                        </TableRow>
+                      </TableBody>
+                    </Table>
+                  </div>
+
+                  {rIdx < tableResponses.length - 1 && (
+                    <div className="border-b border-border" />
+                  )}
+                </div>
+              )
+            })}
 
             {error && (
               <p className="text-sm text-destructive">{error}</p>

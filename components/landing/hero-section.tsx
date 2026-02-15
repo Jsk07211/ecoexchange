@@ -56,7 +56,7 @@ export function HeroSection() {
               </Link>
             </Button>
             <Button size="lg" variant="outline" className="h-12 px-8 text-base" asChild>
-              <Link href="/submit">Start Contributing</Link>
+              <Link href="/programs">Start Contributing</Link>
             </Button>
           </div>
         </div>

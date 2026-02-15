@@ -181,8 +181,9 @@ export function ProgramCatalog() {
         ) : (
           <div className="grid gap-6 md:grid-cols-2">
             {programs.map((program) => (
-              <div
+              <Link
                 key={program.id}
+                href={`/programs/${program.id}`}
                 className="group flex flex-col rounded-2xl border border-border bg-card p-6 transition-all hover:border-primary/25 hover:shadow-sm"
               >
                 {/* Tags row */}
@@ -208,7 +209,7 @@ export function ProgramCatalog() {
                 </div>
 
                 {/* Content */}
-                <h3 className="mt-4 font-serif text-xl font-semibold text-foreground">
+                <h3 className="mt-4 font-serif text-xl font-semibold text-foreground group-hover:text-primary transition-colors">
                   {program.title}
                 </h3>
                 <p className="mt-1 text-sm text-muted-foreground">
@@ -253,12 +254,12 @@ export function ProgramCatalog() {
                 </div>
 
                 {/* Actions */}
-                <div className="mt-4">
+                <div className="mt-4 flex gap-2">
                   <Button size="sm" className="w-full" asChild>
-                    <Link href="/submit">Contribute</Link>
+                    <span>View Program</span>
                   </Button>
                 </div>
-              </div>
+              </Link>
             ))}
           </div>
         )}

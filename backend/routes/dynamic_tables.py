@@ -1,9 +1,12 @@
 import os
+
 import re
 from datetime import date, datetime
 
 import asyncpg
 from fastapi import APIRouter, HTTPException
+
+from pydantic import BaseModel
 
 from backend.models.dynamic_table import DynamicTableRequest
 
@@ -102,33 +105,6 @@ async def create_dynamic_table(req: DynamicTableRequest):
     }
 
 
-@router.get("/tables/{project}")
-async def list_project_tables(project: str):
-    """List all public tables in a project database."""
-    project = project.lower()
-    _validate_identifier(project, "project_name")
-
-    try:
-        conn = await asyncpg.connect(dsn=_project_dsn(project))
-    except asyncpg.InvalidCatalogNameError:
-        raise HTTPException(404, f"Project database '{project}' not found")
-
-    try:
-        rows = await conn.fetch(
-            """
-            SELECT table_name
-            FROM information_schema.tables
-            WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
-            ORDER BY table_name
-            """
-        )
-        tables = [r["table_name"] for r in rows]
-    finally:
-        await conn.close()
-
-    return {"project": project, "tables": tables}
-
-
 @router.get("/tables/{project}/{table}/schema")
 async def get_table_schema(project: str, table: str):
     """Return column names and Postgres types for a dynamic table."""
@@ -212,3 +188,140 @@ async def get_table_rows(project: str, table: str, limit: int = 100, offset: int
         "offset": offset,
         "rows": rows,
     }
+
+
+@router.get("/tables/{project}")
+async def list_project_tables(project: str):
+    """List all tables in a project database."""
+    project = project.lower()
+    _validate_identifier(project, "project_name")
+
+    try:
+        conn = await asyncpg.connect(dsn=_project_dsn(project))
+    except asyncpg.InvalidCatalogNameError:
+        raise HTTPException(404, f"Project database '{project}' not found")
+
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT table_name FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+            ORDER BY table_name
+            """
+        )
+    finally:
+        await conn.close()
+
+    return {"project": project, "tables": [r["table_name"] for r in rows]}
+
+
+class _SingleRowBody(BaseModel):
+    data: dict
+
+
+class _BatchRowsBody(BaseModel):
+    rows: list[dict]
+
+
+async def _get_table_columns(conn: asyncpg.Connection, table: str) -> set[str]:
+    """Return the set of user-defined column names (excludes id and created_at)."""
+    records = await conn.fetch(
+        """
+        SELECT column_name FROM information_schema.columns
+        WHERE table_name = $1 AND table_schema = 'public'
+        """,
+        table,
+    )
+    return {r["column_name"] for r in records} - {"id", "created_at"}
+
+
+def _coerce_row(data: dict, valid_columns: set[str], table: str) -> dict:
+    """Validate column names and coerce date strings to date objects."""
+    bad = set(data.keys()) - valid_columns
+    if bad:
+        raise HTTPException(
+            400,
+            f"Unknown columns for table '{table}': {', '.join(sorted(bad))}. "
+            f"Valid columns: {', '.join(sorted(valid_columns))}",
+        )
+    row: dict = {}
+    for k, v in data.items():
+        if isinstance(v, str):
+            # Try to coerce date-like strings
+            try:
+                row[k] = date.fromisoformat(v)
+                continue
+            except ValueError:
+                pass
+        row[k] = v
+    return row
+
+
+@router.post("/tables/{project}/{table}/rows")
+async def insert_row(project: str, table: str, body: _SingleRowBody):
+    """Insert a single row into a dynamic table."""
+    project = project.lower()
+    table = table.lower()
+    _validate_identifier(project, "project_name")
+    _validate_identifier(table, "table_name")
+
+    try:
+        conn = await asyncpg.connect(dsn=_project_dsn(project))
+    except asyncpg.InvalidCatalogNameError:
+        raise HTTPException(404, f"Project database '{project}' not found")
+
+    try:
+        valid_columns = await _get_table_columns(conn, table)
+        if not valid_columns:
+            raise HTTPException(404, f"Table '{table}' not found in '{project}'")
+
+        row = _coerce_row(body.data, valid_columns, table)
+        cols = list(row.keys())
+        placeholders = ", ".join(f"${i+1}" for i in range(len(cols)))
+        col_names = ", ".join(f'"{c}"' for c in cols)
+
+        record = await conn.fetchrow(
+            f'INSERT INTO "{table}" ({col_names}) VALUES ({placeholders}) RETURNING *',
+            *row.values(),
+        )
+    finally:
+        await conn.close()
+
+    return {"status": "ok", "row": _serialize_row(record)}
+
+
+@router.post("/tables/{project}/{table}/rows/batch")
+async def insert_rows_batch(project: str, table: str, body: _BatchRowsBody):
+    """Bulk insert rows into a dynamic table."""
+    project = project.lower()
+    table = table.lower()
+    _validate_identifier(project, "project_name")
+    _validate_identifier(table, "table_name")
+
+    if not body.rows:
+        raise HTTPException(400, "No rows provided")
+
+    try:
+        conn = await asyncpg.connect(dsn=_project_dsn(project))
+    except asyncpg.InvalidCatalogNameError:
+        raise HTTPException(404, f"Project database '{project}' not found")
+
+    try:
+        valid_columns = await _get_table_columns(conn, table)
+        if not valid_columns:
+            raise HTTPException(404, f"Table '{table}' not found in '{project}'")
+
+        coerced = [_coerce_row(r, valid_columns, table) for r in body.rows]
+        # Use columns from first row (all rows should have same keys)
+        cols = list(coerced[0].keys())
+        col_names = ", ".join(f'"{c}"' for c in cols)
+        placeholders = ", ".join(f"${i+1}" for i in range(len(cols)))
+
+        await conn.executemany(
+            f'INSERT INTO "{table}" ({col_names}) VALUES ({placeholders})',
+            [tuple(r[c] for c in cols) for r in coerced],
+        )
+    finally:
+        await conn.close()
+
+    return {"status": "ok", "count": len(coerced)}

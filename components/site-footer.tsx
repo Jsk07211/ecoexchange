@@ -6,7 +6,7 @@ const footerLinks = [
     title: "Platform",
     links: [
       { name: "Discover Programs", href: "/programs" },
-      { name: "Submit Data", href: "/submit" },
+      { name: "Contribute Data", href: "/programs" },
     ],
   },
   {

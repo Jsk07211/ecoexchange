@@ -22,7 +22,7 @@ const audiences = [
     description:
       "Find programs that match your interests and skills. Contribute observations through guided, mobile-friendly forms with instant feedback.",
     cta: "Start Contributing",
-    href: "/submit",
+    href: "/programs",
     features: [
       "Guided data entry",
       "GPS auto-capture",

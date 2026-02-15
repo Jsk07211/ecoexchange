@@ -10,7 +10,6 @@ import { cn } from "@/lib/utils"
 const navigation = [
   { name: "Discover", href: "/" },
   { name: "Programs", href: "/programs" },
-  { name: "Submit Data", href: "/submit" },
 ]
 
 export function SiteHeader() {
@@ -57,7 +56,7 @@ export function SiteHeader() {
             <Link href="/programs">Browse Programs</Link>
           </Button>
           <Button size="sm" asChild>
-            <Link href="/submit">Contribute Data</Link>
+            <Link href="/programs">Contribute Data</Link>
           </Button>
         </div>
 
@@ -105,7 +104,7 @@ export function SiteHeader() {
               </Link>
             </Button>
             <Button size="sm" asChild>
-              <Link href="/submit" onClick={() => setMobileOpen(false)}>
+              <Link href="/programs" onClick={() => setMobileOpen(false)}>
                 Contribute Data
               </Link>
             </Button>

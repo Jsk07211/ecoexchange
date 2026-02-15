@@ -20,7 +20,7 @@ export function CtaSection() {
             className="h-12 px-8 text-base"
             asChild
           >
-            <Link href="/submit">
+            <Link href="/programs">
               Start Contributing
               <ArrowRight className="ml-2 h-4 w-4" />
             </Link>

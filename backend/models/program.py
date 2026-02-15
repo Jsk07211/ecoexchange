@@ -14,3 +14,4 @@ class Program(BaseModel):
     status: Literal["active", "upcoming", "completed"]
     tags: list[str]
     deadline: Optional[str] = None
+    contribution_spec: Optional[dict] = None

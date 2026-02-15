@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 
+import sqlalchemy
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -13,6 +14,12 @@ from backend.seed import seed
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Add contribution_spec column if missing (no Alembic migrations)
+        await conn.execute(
+            sqlalchemy.text(
+                "ALTER TABLE programs ADD COLUMN IF NOT EXISTS contribution_spec JSONB"
+            )
+        )
     async with async_session() as session:
         await seed(session)
     yield

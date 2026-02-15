@@ -1,3 +1,15 @@
+export interface ContributionField {
+  name: string
+  type: "INT" | "STRING" | "FLOAT" | "BOOLEAN" | "DATE" | "TEXT"
+  required: boolean
+  description?: string
+}
+
+export interface ContributionSpec {
+  accepted_files: string[]
+  fields: ContributionField[]
+}
+
 export interface Program {
   id: string
   title: string
@@ -10,6 +22,7 @@ export interface Program {
   status: "active" | "upcoming" | "completed"
   tags: string[]
   deadline?: string
+  contributionSpec?: ContributionSpec
 }
 
 export interface Dataset {

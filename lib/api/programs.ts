@@ -40,5 +40,6 @@ function mapProgram(p: Record<string, unknown>): Program {
     status: p.status as Program["status"],
     tags: p.tags as string[],
     deadline: p.deadline as string | undefined,
+    contributionSpec: p.contribution_spec as Program["contributionSpec"],
   }
 }

@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.database import Base, async_session, engine
 from backend.db_models import DatasetDB, ProgramDB, SubmissionDB  # noqa: F401
-from backend.routes import datasets, programs, submissions, uploads
+from backend.routes import datasets, dynamic_tables, programs, submissions, uploads
 from backend.seed import seed
 
 
@@ -33,6 +33,7 @@ app.include_router(programs.router)
 app.include_router(datasets.router)
 app.include_router(submissions.router)
 app.include_router(uploads.router)
+app.include_router(dynamic_tables.router)
 
 
 @app.get("/api/categories")

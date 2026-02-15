@@ -28,7 +28,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { getProgram } from "@/lib/api/programs"
-import { getProjectTables } from "@/lib/api/tables"
+import { getProjectTables, getTableSchema } from "@/lib/api/tables"
 import { insertRow, insertRowsBatch } from "@/lib/api/tables"
 import { uploadFiles, type CnnResult } from "@/lib/api/uploads"
 import type { Program, ContributionField } from "@/lib/types"
@@ -109,6 +109,8 @@ export default function ContributePage() {
   const [projectKey, setProjectKey] = useState(id)
   const [tables, setTables] = useState<string[]>([])
   const [tableName, setTableName] = useState<string | null>(null)
+  // Actual fields derived from table schema + contribution spec types
+  const [activeFields, setActiveFields] = useState<ContributionField[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -116,6 +118,8 @@ export default function ContributePage() {
   const [formData, setFormData] = useState<Record<string, string | boolean>>({})
   const [formImages, setFormImages] = useState<Record<string, { file: File; preview: string }>>({})
   const [imageCnn, setImageCnn] = useState<Record<string, CnnResult>>({})
+  const [imageQuality, setImageQuality] = useState<Record<string, { score: number; warnings: { check: string; message: string }[] }>>({})
+  const [imageChecking, setImageChecking] = useState<Record<string, boolean>>({})
   const [submitting, setSubmitting] = useState(false)
   const [submitSuccess, setSubmitSuccess] = useState(false)
 
@@ -134,24 +138,78 @@ export default function ContributePage() {
         const prog = await getProgram(id)
         setProgram(prog)
 
-        // Initialize form data from spec fields
-        if (prog.contributionSpec) {
+        // Get all tables for this project
+        const pk = prog.projectName || id
+        setProjectKey(pk)
+        let firstTable: string | null = null
+        try {
+          const res = await getProjectTables(pk)
+          setTables(res.tables)
+          if (res.tables.length > 0) {
+            firstTable = res.tables[0]
+            setTableName(firstTable)
+          }
+        } catch {
+          // No tables yet
+        }
+
+        // Build form fields from actual table schema + spec type info
+        const specFields = prog.contributionSpec?.fields ?? []
+        if (firstTable) {
+          try {
+            const schema = await getTableSchema(pk, firstTable)
+            const dataCols = schema.columns.filter(
+              (c) => c.name !== "id" && c.name !== "created_at"
+            )
+            // Match each column to its spec entry for type/description
+            // Try by name first, then by position as fallback
+            const fields: ContributionField[] = dataCols.map((col, colIdx) => {
+              const specMatch =
+                specFields.find((s) => s.name === col.name) ??
+                specFields[colIdx]
+              // Infer type from spec or from SQL type
+              let fieldType: ContributionField["type"] = "STRING"
+              if (specMatch) {
+                fieldType = specMatch.type
+              } else if (col.type.includes("int")) {
+                fieldType = "INT"
+              } else if (col.type.includes("float") || col.type.includes("double") || col.type.includes("numeric")) {
+                fieldType = "FLOAT"
+              } else if (col.type.includes("bool")) {
+                fieldType = "BOOLEAN"
+              } else if (col.type.includes("date")) {
+                fieldType = "DATE"
+              }
+              return {
+                name: col.name,
+                type: fieldType,
+                required: specMatch?.required ?? false,
+                description: specMatch?.description ?? col.name,
+              }
+            })
+            setActiveFields(fields)
+            // Initialize form data from actual column names
+            const initial: Record<string, string | boolean> = {}
+            for (const f of fields) {
+              initial[f.name] = f.type === "BOOLEAN" ? false : ""
+            }
+            setFormData(initial)
+          } catch {
+            // Fallback to spec fields if schema fetch fails
+            setActiveFields(specFields)
+            const initial: Record<string, string | boolean> = {}
+            for (const f of specFields) {
+              initial[f.name] = f.type === "BOOLEAN" ? false : ""
+            }
+            setFormData(initial)
+          }
+        } else if (specFields.length > 0) {
+          setActiveFields(specFields)
           const initial: Record<string, string | boolean> = {}
-          for (const f of prog.contributionSpec.fields) {
+          for (const f of specFields) {
             initial[f.name] = f.type === "BOOLEAN" ? false : ""
           }
           setFormData(initial)
-        }
-
-        // Get all tables for this project
-        try {
-          const pk = prog.projectName || id
-          setProjectKey(pk)
-          const res = await getProjectTables(pk)
-          setTables(res.tables)
-          if (res.tables.length > 0) setTableName(res.tables[0])
-        } catch {
-          // No tables yet
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load program")
@@ -165,13 +223,13 @@ export default function ContributePage() {
   const handleSingleSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault()
-      if (!program?.contributionSpec || !tableName) return
+      if (!tableName || activeFields.length === 0) return
 
       setSubmitting(true)
       setSubmitSuccess(false)
       try {
         const data: Record<string, unknown> = {}
-        for (const field of program.contributionSpec.fields) {
+        for (const field of activeFields) {
           if (field.type === "IMAGE") continue // handled below
           const raw = formData[field.name]
           if (field.type === "BOOLEAN") {
@@ -186,7 +244,7 @@ export default function ContributePage() {
         }
 
         // Upload any image fields and add their URLs to the row
-        const imageFields = program.contributionSpec.fields.filter((f) => f.type === "IMAGE")
+        const imageFields = activeFields.filter((f) => f.type === "IMAGE")
         for (const field of imageFields) {
           // Check if we already uploaded this image (from CNN eager check)
           const existingUrl = formData[`__url_${field.name}`]
@@ -209,7 +267,7 @@ export default function ContributePage() {
 
         // Reset form
         const reset: Record<string, string | boolean> = {}
-        for (const f of program.contributionSpec.fields) {
+        for (const f of activeFields) {
           if (f.type !== "IMAGE") reset[f.name] = f.type === "BOOLEAN" ? false : ""
         }
         setFormData(reset)
@@ -219,6 +277,8 @@ export default function ContributePage() {
         }
         setFormImages({})
         setImageCnn({})
+        setImageQuality({})
+        setImageChecking({})
         setTimeout(() => setSubmitSuccess(false), 3000)
       } catch (err) {
         setError(err instanceof Error ? err.message : "Submission failed")
@@ -226,7 +286,7 @@ export default function ContributePage() {
         setSubmitting(false)
       }
     },
-    [program, tableName, formData, formImages, projectKey]
+    [program, tableName, formData, formImages, projectKey, activeFields]
   )
 
   const imageExtensions = new Set(["jpg", "jpeg", "png", "webp"])
@@ -260,11 +320,11 @@ export default function ContributePage() {
             return
           }
 
-          if (program?.contributionSpec) {
+          if (activeFields.length > 0) {
             const imageFieldNames = new Set(
-              program.contributionSpec.fields.filter((f) => f.type === "IMAGE").map((f) => f.name)
+              activeFields.filter((f) => f.type === "IMAGE").map((f) => f.name)
             )
-            const nonImageFields = program.contributionSpec.fields.filter((f) => f.type !== "IMAGE")
+            const nonImageFields = activeFields.filter((f) => f.type !== "IMAGE")
             const actual = new Set(Object.keys(rows[0]))
             // Only require non-IMAGE columns; IMAGE columns in CSV are optional (contain filenames)
             const missing = nonImageFields.filter((f) => !actual.has(f.name)).map((f) => f.name)
@@ -291,10 +351,10 @@ export default function ContributePage() {
         reader.readAsText(csvFile)
       } else if (images.length > 0 && !csvFile) {
         // Images only — auto-generate rows from filenames
-        const imageFields = program?.contributionSpec?.fields.filter((f) => f.type === "IMAGE") ?? []
-        const stringFields = program?.contributionSpec?.fields.filter(
+        const imageFields = activeFields.filter((f) => f.type === "IMAGE") ?? []
+        const stringFields = activeFields.filter(
           (f) => f.type === "STRING" || f.type === "TEXT"
-        ) ?? []
+        )
 
         const rows = images.map((img) => {
           const row: Record<string, string> = {}
@@ -314,17 +374,17 @@ export default function ContributePage() {
         setCsvRows(rows)
       }
     },
-    [program]
+    [program, activeFields]
   )
 
   const handleBatchSubmit = useCallback(async () => {
-    if (!program?.contributionSpec || !tableName || csvRows.length === 0) return
+    if (!tableName || csvRows.length === 0 || activeFields.length === 0) return
 
     setBatchSubmitting(true)
     setBatchResult(null)
     setCsvError(null)
     try {
-      const imageFields = program.contributionSpec.fields.filter((f) => f.type === "IMAGE")
+      const imageFields = activeFields.filter((f) => f.type === "IMAGE")
 
       // Upload all batch images and build a filename → URL map
       const filenameToUrl: Record<string, string> = {}
@@ -339,7 +399,7 @@ export default function ContributePage() {
 
       const coerced = csvRows.map((row) => {
         const out: Record<string, unknown> = {}
-        for (const field of program.contributionSpec!.fields) {
+        for (const field of activeFields) {
           if (row[field.name] === undefined) continue
 
           if (field.type === "IMAGE") {
@@ -362,7 +422,7 @@ export default function ContributePage() {
     } finally {
       setBatchSubmitting(false)
     }
-  }, [program, tableName, csvRows, batchImages, projectKey])
+  }, [tableName, csvRows, batchImages, projectKey, activeFields])
 
   if (loading) {
     return (
@@ -385,7 +445,7 @@ export default function ContributePage() {
     )
   }
 
-  if (!program.contributionSpec) {
+  if (activeFields.length === 0) {
     return (
       <div className="mx-auto max-w-lg py-20 text-center">
         <AlertCircle className="mx-auto h-8 w-8 text-muted-foreground" />
@@ -402,8 +462,7 @@ export default function ContributePage() {
     )
   }
 
-  const spec = program.contributionSpec
-  const hasImageFields = spec.fields.some((f) => f.type === "IMAGE")
+  const hasImageFields = activeFields.some((f) => f.type === "IMAGE")
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-10 lg:px-8">
@@ -448,7 +507,7 @@ export default function ContributePage() {
         {/* Single Entry Tab */}
         <TabsContent value="single" className="mt-6">
           <form onSubmit={handleSingleSubmit} className="space-y-4">
-            {spec.fields.map((field) => (
+            {activeFields.map((field) => (
               <div key={field.name}>
                 {field.type === "IMAGE" ? (
                   <div className="space-y-1.5">
@@ -483,12 +542,36 @@ export default function ContributePage() {
                                 delete next[field.name]
                                 return next
                               })
+                              setImageQuality((prev) => {
+                                const next = { ...prev }
+                                delete next[field.name]
+                                return next
+                              })
+                              setImageChecking((prev) => ({ ...prev, [field.name]: false }))
                             }}
                             className="absolute -right-2 -top-2 rounded-full bg-destructive p-1 text-destructive-foreground"
                           >
                             <X className="h-3 w-3" />
                           </button>
                         </div>
+                        {/* Checking spinner */}
+                        {imageChecking[field.name] && (
+                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            Analyzing image...
+                          </div>
+                        )}
+                        {/* Quality warnings */}
+                        {imageQuality[field.name] && imageQuality[field.name].warnings.length > 0 && (
+                          <div className="space-y-1">
+                            {imageQuality[field.name].warnings.map((w, i) => (
+                              <div key={i} className="flex items-center gap-1.5 rounded-md bg-amber-500/10 px-3 py-1.5 text-sm text-amber-600">
+                                <AlertTriangle className="h-4 w-4 shrink-0" />
+                                {w.message}
+                              </div>
+                            ))}
+                          </div>
+                        )}
                         {/* CNN result badge */}
                         {imageCnn[field.name] && (
                           <div
@@ -506,6 +589,13 @@ export default function ContributePage() {
                             {imageCnn[field.name].message}
                           </div>
                         )}
+                        {/* All good */}
+                        {imageQuality[field.name] && imageQuality[field.name].warnings.length === 0 && !imageCnn[field.name] && (
+                          <div className="flex items-center gap-1.5 rounded-md bg-primary/10 px-3 py-1.5 text-sm text-primary">
+                            <CheckCircle2 className="h-4 w-4 shrink-0" />
+                            Image quality: Good
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <div
@@ -521,21 +611,33 @@ export default function ContributePage() {
                                 ...prev,
                                 [field.name]: { file, preview: URL.createObjectURL(file) },
                               }))
-                              // Eagerly upload to get CNN results
-                              if (program.cnnFilter) {
-                                try {
-                                  const res = await uploadFiles([file], projectKey)
-                                  const r = res.results[0]
-                                  if (r?.cnn) {
+                              // Eagerly upload to get quality + CNN results
+                              setImageChecking((prev) => ({ ...prev, [field.name]: true }))
+                              try {
+                                const res = await uploadFiles([file], projectKey)
+                                const r = res.results[0]
+                                if (r) {
+                                  // Store quality results
+                                  setImageQuality((prev) => ({
+                                    ...prev,
+                                    [field.name]: {
+                                      score: r.quality.score,
+                                      warnings: r.quality.warnings,
+                                    },
+                                  }))
+                                  // Store CNN results
+                                  if (r.cnn) {
                                     setImageCnn((prev) => ({ ...prev, [field.name]: r.cnn! }))
                                   }
                                   // Store the URL so we don't re-upload on submit
-                                  if (r?.url) {
+                                  if (r.url) {
                                     setFormData((prev) => ({ ...prev, [`__url_${field.name}`]: r.url! }))
                                   }
-                                } catch {
-                                  // CNN check failed, still allow the image
                                 }
+                              } catch {
+                                // Check failed, still allow the image
+                              } finally {
+                                setImageChecking((prev) => ({ ...prev, [field.name]: false }))
                               }
                             }
                           }
@@ -621,7 +723,7 @@ export default function ContributePage() {
             <p className="text-xs text-muted-foreground">
               {hasImageFields
                 ? "CSV + images: match by filename. Images only: auto-fills name from filename."
-                : `Expected headers: ${spec.fields.map((f) => f.name).join(", ")}`}
+                : `Expected headers: ${activeFields.map((f) => f.name).join(", ")}`}
             </p>
           </div>
 
@@ -672,7 +774,7 @@ export default function ContributePage() {
                     {csvRows.slice(0, 10).map((row, i) => (
                       <TableRow key={i}>
                         {Object.entries(row).map(([col, val]) => {
-                          const isImg = spec.fields.find((f) => f.name === col)?.type === "IMAGE"
+                          const isImg = activeFields.find((f) => f.name === col)?.type === "IMAGE"
                           return (
                             <TableCell key={col}>
                               {isImg

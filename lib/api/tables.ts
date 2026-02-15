@@ -52,6 +52,13 @@ export function insertRow(project: string, table: string, data: Record<string, u
   )
 }
 
+export function deleteRow(project: string, table: string, rowId: number) {
+  return apiFetch<{ status: string; deleted_id: number }>(
+    `/api/tables/${project}/${table}/rows/${rowId}`,
+    { method: "DELETE" }
+  )
+}
+
 export function insertRowsBatch(project: string, table: string, rows: Record<string, unknown>[]) {
   return apiFetch<{ status: string; count: number }>(
     `/api/tables/${project}/${table}/rows/batch`,

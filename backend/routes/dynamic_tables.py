@@ -290,6 +290,31 @@ async def insert_row(project: str, table: str, body: _SingleRowBody):
     return {"status": "ok", "row": _serialize_row(record)}
 
 
+@router.delete("/tables/{project}/{table}/rows/{row_id}")
+async def delete_row(project: str, table: str, row_id: int):
+    """Delete a single row by id from a dynamic table."""
+    project = project.lower()
+    table = table.lower()
+    _validate_identifier(project, "project_name")
+    _validate_identifier(table, "table_name")
+
+    try:
+        conn = await asyncpg.connect(dsn=_project_dsn(project))
+    except asyncpg.InvalidCatalogNameError:
+        raise HTTPException(404, f"Project database '{project}' not found")
+
+    try:
+        result = await conn.execute(
+            f'DELETE FROM "{table}" WHERE id = $1', row_id
+        )
+        if result == "DELETE 0":
+            raise HTTPException(404, f"Row {row_id} not found in '{table}'")
+    finally:
+        await conn.close()
+
+    return {"status": "ok", "deleted_id": row_id}
+
+
 @router.post("/tables/{project}/{table}/rows/batch")
 async def insert_rows_batch(project: str, table: str, body: _BatchRowsBody):
     """Bulk insert rows into a dynamic table."""

@@ -16,8 +16,7 @@ export function CtaSection() {
         <div className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
           <Button
             size="lg"
-            variant="secondary"
-            className="h-12 px-8 text-base"
+            className="h-12 bg-white px-8 text-base text-primary hover:bg-white/90"
             asChild
           >
             <Link href="/programs">

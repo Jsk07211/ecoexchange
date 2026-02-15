@@ -1,5 +1,11 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 
+export interface QualityScanResult {
+  score: number
+  passed: boolean
+  reason: string
+}
+
 export interface UploadFilterResult {
   filename: string
   fileType: "image" | "text" | "video" | "unknown"
@@ -7,6 +13,8 @@ export interface UploadFilterResult {
   accepted: boolean
   reason: string | null
   url: string | null
+  detectedLabel: string | null
+  quality: QualityScanResult
   aiTags: string[]
   aiConfidence: number | null
 }
@@ -48,6 +56,8 @@ export async function uploadFiles(
       accepted: r.accepted,
       reason: r.reason,
       url: r.url,
+      detectedLabel: r.detected_label,
+      quality: r.quality,
       aiTags: r.ai_tags,
       aiConfidence: r.ai_confidence,
     })),

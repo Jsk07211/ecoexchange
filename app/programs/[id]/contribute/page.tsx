@@ -37,6 +37,17 @@ interface ImagePreview {
   serverUrl?: string
   species: string
   description: string
+  qualityScore?: number
+  qualityReason?: string
+}
+
+function labelFromFilename(filename: string): string {
+  const stem = filename.includes(".") ? filename.split(".").slice(0, -1).join(".") : filename
+  return stem
+    .replace(/[-_]+/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .trim()
 }
 
 function fieldInput(
@@ -127,11 +138,11 @@ export default function ContributePage() {
   const [batchSubmitting, setBatchSubmitting] = useState(false)
   const [batchResult, setBatchResult] = useState<number | null>(null)
 
-  // Image upload state
+  // Image upload state: "select" → "validated" → "confirmed"
+  type ImageStep = "select" | "validating" | "validated" | "confirming" | "confirmed"
   const [imagePreviews, setImagePreviews] = useState<ImagePreview[]>([])
-  const [imageUploading, setImageUploading] = useState(false)
+  const [imageStep, setImageStep] = useState<ImageStep>("select")
   const [imageError, setImageError] = useState<string | null>(null)
-  const [imageUploadDone, setImageUploadDone] = useState(false)
 
   useEffect(() => {
     async function load() {
@@ -274,7 +285,7 @@ export default function ContributePage() {
     const newPreviews: ImagePreview[] = accepted.map((file) => ({
       file,
       localUrl: URL.createObjectURL(file),
-      species: "",
+      species: labelFromFilename(file.name),
       description: "",
     }))
     setImagePreviews((prev) => [...prev, ...newPreviews])
@@ -294,11 +305,10 @@ export default function ContributePage() {
     })
   }, [])
 
-  const handleImageUpload = useCallback(async () => {
+  const handleValidate = useCallback(async () => {
     if (imagePreviews.length === 0) return
-    setImageUploading(true)
+    setImageStep("validating")
     setImageError(null)
-    setImageUploadDone(false)
     try {
       const files = imagePreviews.map((p) => p.file)
       const res = await uploadFiles(files, id)
@@ -306,26 +316,37 @@ export default function ContributePage() {
         prev.map((p, i) => ({
           ...p,
           serverUrl: res.results[i]?.url ?? undefined,
+          qualityScore: res.results[i]?.quality.score,
+          qualityReason: res.results[i]?.quality.reason,
+          species: p.species || res.results[i]?.detectedLabel || "",
         }))
       )
+      setImageStep("validated")
+    } catch (err) {
+      setImageError(err instanceof Error ? err.message : "Validation failed")
+      setImageStep("select")
+    }
+  }, [imagePreviews, id])
 
-      // Insert each uploaded image as a row in the bird_images table
-      for (let i = 0; i < res.results.length; i++) {
-        const result = res.results[i]
-        const preview = imagePreviews[i]
-        if (result.accepted && result.url) {
-          const row: Record<string, unknown> = { image_url: result.url }
-          if (preview?.species) row.species = preview.species
-          if (preview?.description) row.description = preview.description
+  const handleConfirmUpload = useCallback(async () => {
+    setImageStep("confirming")
+    setImageError(null)
+    try {
+      for (const img of imagePreviews) {
+        if (img.serverUrl) {
+          const row: Record<string, unknown> = {
+            image_url: img.serverUrl,
+            quality_score: img.qualityScore ?? 100,
+          }
+          if (img.species) row.species = img.species
+          if (img.description) row.description = img.description
           await insertRow(id, "bird_images", row)
         }
       }
-
-      setImageUploadDone(true)
+      setImageStep("confirmed")
     } catch (err) {
-      setImageError(err instanceof Error ? err.message : "Image upload failed")
-    } finally {
-      setImageUploading(false)
+      setImageError(err instanceof Error ? err.message : "Save failed")
+      setImageStep("validated")
     }
   }, [imagePreviews, id])
 
@@ -537,40 +558,58 @@ export default function ContributePage() {
         {/* Images Tab */}
         {acceptsImages && (
           <TabsContent value="images" className="mt-6 space-y-4">
-            <div
-              className="flex cursor-pointer flex-col items-center gap-2 rounded-xl border-2 border-dashed border-border p-8 text-center transition-colors hover:border-primary/40"
-              onDragOver={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
-              }}
-              onDrop={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
-                if (e.dataTransfer.files.length > 0) {
-                  handleImageSelect(e.dataTransfer.files)
-                }
-              }}
-              onClick={() => {
-                const input = document.createElement("input")
-                input.type = "file"
-                input.accept = "image/jpeg,image/png,image/webp"
-                input.multiple = true
-                input.onchange = () => {
-                  if (input.files && input.files.length > 0) {
-                    handleImageSelect(input.files)
-                  }
-                }
-                input.click()
-              }}
-            >
-              <ImageIcon className="h-8 w-8 text-muted-foreground" />
-              <p className="text-sm font-medium text-foreground">
-                Drop images here or click to browse
-              </p>
-              <p className="text-xs text-muted-foreground">
-                Accepts JPG, PNG, and WebP
-              </p>
+            {/* Step indicator */}
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span className={imageStep === "select" ? "font-semibold text-foreground" : ""}>
+                1. Select
+              </span>
+              <span>&rarr;</span>
+              <span className={imageStep === "validating" || imageStep === "validated" ? "font-semibold text-foreground" : ""}>
+                2. Validate
+              </span>
+              <span>&rarr;</span>
+              <span className={imageStep === "confirming" || imageStep === "confirmed" ? "font-semibold text-foreground" : ""}>
+                3. Confirm
+              </span>
             </div>
+
+            {/* Drop zone — visible during select step */}
+            {(imageStep === "select") && (
+              <div
+                className="flex cursor-pointer flex-col items-center gap-2 rounded-xl border-2 border-dashed border-border p-8 text-center transition-colors hover:border-primary/40"
+                onDragOver={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                }}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  if (e.dataTransfer.files.length > 0) {
+                    handleImageSelect(e.dataTransfer.files)
+                  }
+                }}
+                onClick={() => {
+                  const input = document.createElement("input")
+                  input.type = "file"
+                  input.accept = "image/jpeg,image/png,image/webp"
+                  input.multiple = true
+                  input.onchange = () => {
+                    if (input.files && input.files.length > 0) {
+                      handleImageSelect(input.files)
+                    }
+                  }
+                  input.click()
+                }}
+              >
+                <ImageIcon className="h-8 w-8 text-muted-foreground" />
+                <p className="text-sm font-medium text-foreground">
+                  Drop images here or click to browse
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Accepts JPG, PNG, and WebP
+                </p>
+              </div>
+            )}
 
             {imageError && (
               <div className="rounded-lg border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
@@ -580,9 +619,17 @@ export default function ContributePage() {
 
             {imagePreviews.length > 0 && (
               <>
+                {/* Image cards */}
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   {imagePreviews.map((img, i) => (
-                    <div key={i} className="group relative overflow-hidden rounded-lg border border-border">
+                    <div
+                      key={i}
+                      className={`group relative overflow-hidden rounded-lg border ${
+                        imageStep === "validated" && img.qualityScore !== undefined && img.qualityScore < 50
+                          ? "border-destructive/40"
+                          : "border-border"
+                      }`}
+                    >
                       <div className="relative aspect-video">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img
@@ -590,7 +637,7 @@ export default function ContributePage() {
                           alt={img.file.name}
                           className="h-full w-full object-cover"
                         />
-                        {!imageUploadDone && (
+                        {imageStep !== "confirmed" && (
                           <button
                             type="button"
                             onClick={(e) => {
@@ -602,52 +649,86 @@ export default function ContributePage() {
                             <X className="h-3.5 w-3.5" />
                           </button>
                         )}
-                        {img.serverUrl && (
-                          <div className="absolute bottom-0 left-0 right-0 bg-primary/80 px-2 py-0.5 text-center text-xs text-primary-foreground">
-                            Uploaded
-                          </div>
-                        )}
                       </div>
                       <div className="space-y-2 p-3">
                         <Input
                           placeholder="Species name"
                           value={img.species}
                           onChange={(e) => updateImageLabel(i, "species", e.target.value)}
-                          disabled={imageUploadDone}
+                          disabled={imageStep === "confirmed"}
                         />
                         <Input
                           placeholder="Description (optional)"
                           value={img.description}
                           onChange={(e) => updateImageLabel(i, "description", e.target.value)}
-                          disabled={imageUploadDone}
+                          disabled={imageStep === "confirmed"}
                         />
+                        {img.qualityScore !== undefined && (
+                          <div className="flex items-center gap-2 text-xs">
+                            <span className={`inline-flex items-center rounded-full px-2 py-0.5 font-medium ${
+                              img.qualityScore >= 80
+                                ? "bg-primary/10 text-primary"
+                                : img.qualityScore >= 50
+                                  ? "bg-yellow-500/10 text-yellow-600"
+                                  : "bg-destructive/10 text-destructive"
+                            }`}>
+                              Quality: {img.qualityScore}%
+                            </span>
+                            <span className="text-muted-foreground">{img.qualityReason}</span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   ))}
                 </div>
 
-                {!imageUploadDone && (
-                  <Button onClick={handleImageUpload} disabled={imageUploading}>
-                    {imageUploading ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Uploading...
-                      </>
-                    ) : (
-                      <>
-                        <Upload className="mr-2 h-4 w-4" />
-                        Upload {imagePreviews.length} image{imagePreviews.length !== 1 ? "s" : ""}
-                      </>
-                    )}
-                  </Button>
-                )}
+                {/* Action buttons per step */}
+                <div className="flex items-center gap-3">
+                  {imageStep === "select" && (
+                    <Button onClick={handleValidate}>
+                      <Upload className="mr-2 h-4 w-4" />
+                      Validate {imagePreviews.length} image{imagePreviews.length !== 1 ? "s" : ""}
+                    </Button>
+                  )}
 
-                {imageUploadDone && (
-                  <div className="flex items-center gap-1.5 text-sm text-primary">
-                    <CheckCircle2 className="h-4 w-4" />
-                    {imagePreviews.length} image{imagePreviews.length !== 1 ? "s" : ""} uploaded successfully
-                  </div>
-                )}
+                  {imageStep === "validating" && (
+                    <Button disabled>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Validating...
+                    </Button>
+                  )}
+
+                  {imageStep === "validated" && (
+                    <>
+                      <Button onClick={handleConfirmUpload}>
+                        <CheckCircle2 className="mr-2 h-4 w-4" />
+                        Confirm &amp; Save {imagePreviews.length} image{imagePreviews.length !== 1 ? "s" : ""}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          setImageStep("select")
+                        }}
+                      >
+                        Back
+                      </Button>
+                    </>
+                  )}
+
+                  {imageStep === "confirming" && (
+                    <Button disabled>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Saving...
+                    </Button>
+                  )}
+
+                  {imageStep === "confirmed" && (
+                    <div className="flex items-center gap-1.5 text-sm text-primary">
+                      <CheckCircle2 className="h-4 w-4" />
+                      {imagePreviews.length} image{imagePreviews.length !== 1 ? "s" : ""} saved successfully
+                    </div>
+                  )}
+                </div>
               </>
             )}
           </TabsContent>

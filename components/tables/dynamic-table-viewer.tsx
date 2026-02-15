@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Database,
   AlertCircle,
+  Trash2,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -21,6 +22,7 @@ import {
 import {
   getTableSchema,
   getTableRows,
+  deleteRow,
   type ColumnSchema,
 } from "@/lib/api/tables"
 
@@ -119,6 +121,7 @@ export function DynamicTableViewer({
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState<number | null>(null)
 
   const fetchData = useCallback(
     async (newOffset: number) => {
@@ -145,6 +148,21 @@ export function DynamicTableViewer({
   useEffect(() => {
     fetchData(0)
   }, [fetchData])
+
+  const handleDelete = useCallback(
+    async (rowId: number) => {
+      setDeleting(rowId)
+      try {
+        await deleteRow(project, table, rowId)
+        await fetchData(offset)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to delete row")
+      } finally {
+        setDeleting(null)
+      }
+    },
+    [project, table, fetchData, offset]
+  )
 
   const page = Math.floor(offset / PAGE_SIZE) + 1
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
@@ -227,32 +245,50 @@ export function DynamicTableViewer({
               {columns.map((col) => (
                 <TableHead key={col.name}>{col.name}</TableHead>
               ))}
+              <TableHead className="w-12" />
             </TableRow>
           </TableHeader>
           <TableBody>
             {rows.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={columns.length}
+                  colSpan={columns.length + 1}
                   className="py-12 text-center text-muted-foreground"
                 >
                   No data yet.
                 </TableCell>
               </TableRow>
             ) : (
-              rows.map((row, i) => (
-                <TableRow key={i}>
-                  {columns.map((col) => (
-                    <TableCell key={col.name}>
-                      <CellValue
-                        value={row[col.name]}
-                        type={col.type}
-                        columnName={col.name}
-                      />
+              rows.map((row, i) => {
+                const rowId = row.id as number
+                return (
+                  <TableRow key={i}>
+                    {columns.map((col) => (
+                      <TableCell key={col.name}>
+                        <CellValue
+                          value={row[col.name]}
+                          type={col.type}
+                          columnName={col.name}
+                        />
+                      </TableCell>
+                    ))}
+                    <TableCell>
+                      <button
+                        onClick={() => handleDelete(rowId)}
+                        disabled={deleting === rowId}
+                        className="rounded p-1 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+                        title="Delete row"
+                      >
+                        {deleting === rowId ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-4 w-4" />
+                        )}
+                      </button>
                     </TableCell>
-                  ))}
-                </TableRow>
-              ))
+                  </TableRow>
+                )
+              })
             )}
           </TableBody>
         </Table>

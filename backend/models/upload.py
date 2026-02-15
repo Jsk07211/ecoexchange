@@ -1,5 +1,5 @@
 from typing import Literal, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class FileInfo(BaseModel):
@@ -7,6 +7,30 @@ class FileInfo(BaseModel):
     content_type: str
     size: int
     file_type: Literal["image", "text", "video", "unknown"]
+
+
+class QualityScanResult(BaseModel):
+    """Result of a quality scan on an uploaded file.
+
+    Replace the stub ``run_quality_scan`` function with real logic
+    (e.g. resolution check, blur detection, EXIF validation) to
+    populate these fields with meaningful values.
+    """
+
+    score: float = Field(
+        default=100.0,
+        ge=0.0,
+        le=100.0,
+        description="Quality score from 0-100. 100 = perfect.",
+    )
+    passed: bool = Field(
+        default=True,
+        description="Whether the file meets the program's quality criteria.",
+    )
+    reason: str = Field(
+        default="Good",
+        description="Human-readable explanation of the quality verdict.",
+    )
 
 
 class UploadFilterResult(BaseModel):
@@ -18,8 +42,9 @@ class UploadFilterResult(BaseModel):
     size: int
     accepted: bool
     reason: Optional[str] = None
-    # placeholder for future AI metadata
     url: Optional[str] = None
+    detected_label: Optional[str] = None
+    quality: QualityScanResult = Field(default_factory=QualityScanResult)
     ai_tags: list[str] = []
     ai_confidence: Optional[float] = None
 

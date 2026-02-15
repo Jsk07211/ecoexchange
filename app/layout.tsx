@@ -34,9 +34,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${_dmSans.variable} ${_sourceSerif.variable}`}>
-      <body className="font-sans">
+      <body className="flex min-h-screen flex-col font-sans">
         <SiteHeader />
-        <main>{children}</main>
+        <main className="flex-1">{children}</main>
         <SiteFooter />
       </body>
     </html>

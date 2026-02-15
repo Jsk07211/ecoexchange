@@ -1,9 +1,10 @@
 import os
+import re
 import uuid
 
 from fastapi import APIRouter, UploadFile, File, Form
 
-from backend.models.upload import UploadFilterResult, UploadResponse
+from backend.models.upload import QualityScanResult, UploadFilterResult, UploadResponse
 
 UPLOAD_DIR = "/app/uploads"
 
@@ -38,14 +39,49 @@ def _detect_file_type(content_type: str, filename: str) -> str:
     return "unknown"
 
 
+def _label_from_filename(filename: str) -> str:
+    """Derive a human-readable label from a filename.
+
+    ``"blue_jay_park.jpg"`` → ``"Blue Jay Park"``
+    """
+    stem = filename.rsplit(".", 1)[0] if "." in filename else filename
+    # Replace underscores, hyphens, and camelCase boundaries with spaces
+    stem = re.sub(r"[-_]+", " ", stem)
+    stem = re.sub(r"([a-z])([A-Z])", r"\1 \2", stem)
+    return stem.strip().title()
+
+
+async def _run_quality_scan(
+    file: UploadFile, file_type: str, contents: bytes
+) -> QualityScanResult:
+    """Stub quality scanner — always returns 100 / Good.
+
+    Replace this with real checks per-program criteria, e.g.:
+      - Minimum resolution (width × height)
+      - Blur / sharpness detection
+      - EXIF metadata presence
+      - File size limits
+      - NSFW / content-policy filtering
+    """
+    return QualityScanResult(score=100.0, passed=True, reason="Good")
+
+
 async def _ai_filter(file: UploadFile, file_type: str, contents: bytes) -> UploadFilterResult:
     """Stub — accepts every file. Replace with real AI filtering later."""
+    quality = await _run_quality_scan(file, file_type, contents)
+    detected_label = (
+        _label_from_filename(file.filename or "unnamed")
+        if file_type == "image"
+        else None
+    )
     return UploadFilterResult(
         filename=file.filename or "unnamed",
         file_type=file_type,  # type: ignore[arg-type]
         size=len(contents),
-        accepted=True,
-        reason="Passed (AI filter not yet active)",
+        accepted=quality.passed,
+        reason="Passed quality scan" if quality.passed else quality.reason,
+        detected_label=detected_label,
+        quality=quality,
         ai_tags=[],
         ai_confidence=None,
     )

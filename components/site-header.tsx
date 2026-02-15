@@ -50,13 +50,6 @@ export function SiteHeader() {
           ))}
         </nav>
 
-        {/* Desktop actions */}
-        <div className="hidden items-center gap-2.5 md:flex">
-          <Button variant="outline" size="sm" asChild>
-            <Link href="/programs">Browse Programs</Link>
-          </Button>
-        </div>
-
         {/* Mobile toggle */}
         <button
           className="flex items-center justify-center rounded-md p-2 text-muted-foreground md:hidden"
@@ -94,13 +87,6 @@ export function SiteHeader() {
               </Link>
             ))}
           </nav>
-          <div className="mt-3 flex flex-col gap-2">
-            <Button variant="outline" size="sm" asChild>
-              <Link href="/programs" onClick={() => setMobileOpen(false)}>
-                Browse Programs
-              </Link>
-            </Button>
-          </div>
         </div>
       )}
     </header>

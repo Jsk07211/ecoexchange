@@ -2,24 +2,21 @@ import Link from "next/link"
 import { ArrowRight, Database, Users, Shield } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
-const stats = [
+const benefits = [
   {
     icon: Users,
-    stat: "5,200+",
-    label: "Active Contributors",
-    description: "Volunteers collecting standardized data across programs",
+    label: "Collaborate Openly",
+    description: "Join programs and contribute observations alongside other citizen scientists worldwide",
   },
   {
     icon: Database,
-    stat: "330K+",
-    label: "Data Records",
-    description: "Quality-checked observations available for reuse",
+    label: "Standardized Data",
+    description: "Every submission follows a shared schema so datasets are clean, consistent, and ready to use",
   },
   {
     icon: Shield,
-    stat: "92%",
-    label: "Avg. Quality Score",
-    description: "Automated validation ensures research-grade data",
+    label: "Quality You Can Trust",
+    description: "Built-in validation and review help ensure research-grade data from every contributor",
   },
 ]
 
@@ -61,9 +58,9 @@ export function HeroSection() {
           </div>
         </div>
 
-        {/* Stats row */}
+        {/* Benefits row */}
         <div className="mx-auto mt-20 grid max-w-4xl gap-6 sm:grid-cols-3">
-          {stats.map((item) => (
+          {benefits.map((item) => (
             <div
               key={item.label}
               className="group relative rounded-2xl border border-border bg-background p-6 text-center transition-colors hover:border-primary/25"
@@ -71,10 +68,7 @@ export function HeroSection() {
               <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-primary/8">
                 <item.icon className="h-5 w-5 text-primary" />
               </div>
-              <p className="mt-4 font-serif text-3xl font-bold text-foreground">
-                {item.stat}
-              </p>
-              <p className="mt-1 text-sm font-semibold text-foreground">
+              <p className="mt-4 text-sm font-semibold text-foreground">
                 {item.label}
               </p>
               <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">

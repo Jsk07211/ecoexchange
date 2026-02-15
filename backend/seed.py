@@ -105,6 +105,7 @@ async def _seed_bird_images_table() -> None:
                 image_url TEXT NOT NULL,
                 species VARCHAR(255),
                 description TEXT,
+                quality_score DOUBLE PRECISION DEFAULT 100.0,
                 latitude DOUBLE PRECISION,
                 longitude DOUBLE PRECISION,
                 observed_on DATE,

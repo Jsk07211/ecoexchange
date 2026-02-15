@@ -11,7 +11,6 @@ const navigation = [
   { name: "Discover", href: "/" },
   { name: "Programs", href: "/programs" },
   { name: "Submit Data", href: "/submit" },
-  { name: "Datasets", href: "/datasets" },
 ]
 
 export function SiteHeader() {

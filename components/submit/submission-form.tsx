@@ -219,7 +219,7 @@ export function SubmissionForm() {
             Submit Another
           </Button>
           <Button variant="outline" asChild>
-            <a href="/datasets">Browse Datasets</a>
+            <a href="/programs">Browse Programs</a>
           </Button>
         </div>
       </div>

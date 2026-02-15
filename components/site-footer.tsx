@@ -7,7 +7,6 @@ const footerLinks = [
     links: [
       { name: "Discover Programs", href: "/programs" },
       { name: "Submit Data", href: "/submit" },
-      { name: "Browse Datasets", href: "/datasets" },
     ],
   },
   {

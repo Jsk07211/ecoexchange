@@ -35,8 +35,8 @@ const audiences = [
     title: "Data Reusers",
     description:
       "Access structured, quality-scored datasets with full provenance. Download in standard formats for analysis, research, or policy decisions.",
-    cta: "Browse Datasets",
-    href: "/datasets",
+    cta: "Browse Programs",
+    href: "/programs",
     features: [
       "Quality-scored data",
       "Standard formats (CSV, JSON)",

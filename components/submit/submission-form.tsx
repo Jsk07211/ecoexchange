@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import {
   CheckCircle2,
   MapPin,
@@ -27,13 +27,21 @@ import {
 import { cn } from "@/lib/utils"
 import { getPrograms } from "@/lib/api/programs"
 import { submitObservation } from "@/lib/api/submissions"
-import type { Program } from "@/lib/types"
+import { getFormConfig } from "@/lib/api/form-configs"
+import { submitRowToTable } from "@/lib/api/tables"
+import type { Program, FormFieldConfig } from "@/lib/types"
 
-const steps = [
+const defaultSteps = [
   { id: 1, title: "Select Program", shortTitle: "Program" },
   { id: 2, title: "Observation Details", shortTitle: "Details" },
   { id: 3, title: "Location & Media", shortTitle: "Location" },
   { id: 4, title: "Review & Submit", shortTitle: "Review" },
+]
+
+const customSteps = [
+  { id: 1, title: "Select Program", shortTitle: "Program" },
+  { id: 2, title: "Fill in Data", shortTitle: "Data" },
+  { id: 3, title: "Review & Submit", shortTitle: "Review" },
 ]
 
 type ValidationResult = {
@@ -42,7 +50,11 @@ type ValidationResult = {
   message: string
 }
 
-export function SubmissionForm() {
+interface SubmissionFormProps {
+  programId?: string
+}
+
+export function SubmissionForm({ programId }: SubmissionFormProps) {
   const [currentStep, setCurrentStep] = useState(1)
   const [submitted, setSubmitted] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -64,12 +76,78 @@ export function SubmissionForm() {
   const [activePrograms, setActivePrograms] = useState<Program[]>([])
   const [loadingPrograms, setLoadingPrograms] = useState(true)
 
+  // Custom form state
+  const [formConfig, setFormConfig] = useState<FormFieldConfig[] | null>(null)
+  const [loadingConfig, setLoadingConfig] = useState(false)
+  const [customValues, setCustomValues] = useState<Record<string, string>>({})
+
+  const hasCustomForm = formConfig !== null
+  const steps = hasCustomForm ? customSteps : defaultSteps
+  const reviewStep = hasCustomForm ? 3 : 4
+
+  const hasTypeErrors = hasCustomForm && formConfig.some((f) => {
+    const v = customValues[f.fieldName] || ""
+    if (v === "") return false
+    if (f.fieldType === "INT" && (isNaN(Number(v)) || !Number.isInteger(Number(v)))) return true
+    if (f.fieldType === "FLOAT" && isNaN(Number(v))) return true
+    return false
+  })
+
+  const loadFormConfig = useCallback(
+    async (program: Program) => {
+      if (!program.projectName || !program.tableName) {
+        setFormConfig(null)
+        return
+      }
+      setLoadingConfig(true)
+      try {
+        const config = await getFormConfig(program.projectName, program.tableName)
+        const visibleFields = config.fields
+          .filter((f) => f.visible)
+          .sort((a, b) => a.order - b.order)
+        setFormConfig(visibleFields)
+        // Initialize values
+        const initial: Record<string, string> = {}
+        for (const f of visibleFields) {
+          initial[f.fieldName] = ""
+        }
+        setCustomValues(initial)
+      } catch {
+        // No form config found — use default form
+        setFormConfig(null)
+      } finally {
+        setLoadingConfig(false)
+      }
+    },
+    []
+  )
+
   useEffect(() => {
     getPrograms({ status: "active" })
-      .then(setActivePrograms)
+      .then((programs) => {
+        setActivePrograms(programs)
+        // If programId was passed via URL, pre-select and advance
+        if (programId) {
+          const match = programs.find((p) => p.id === programId)
+          if (match) {
+            setSelectedProgram(match.id)
+            loadFormConfig(match).then(() => {
+              setCurrentStep(2)
+            })
+          }
+        }
+      })
       .catch(() => {})
       .finally(() => setLoadingPrograms(false))
-  }, [])
+  }, [programId, loadFormConfig])
+
+  const handleProgramSelect = (id: string) => {
+    setSelectedProgram(id)
+    const program = activePrograms.find((p) => p.id === id)
+    if (program) {
+      loadFormConfig(program)
+    }
+  }
 
   const handleGetLocation = () => {
     if (navigator.geolocation) {
@@ -92,19 +170,26 @@ export function SubmissionForm() {
   const handleSubmit = async () => {
     setSubmitting(true)
     try {
-      await submitObservation({
-        selectedProgram,
-        observationType: observationType || undefined,
-        speciesName,
-        count,
-        notes: notes || undefined,
-        latitude,
-        longitude,
-        date,
-        time,
-        habitat: habitat || undefined,
-        confidence: confidence || undefined,
-      })
+      const program = activePrograms.find((p) => p.id === selectedProgram)
+      if (hasCustomForm && program?.projectName && program?.tableName) {
+        // Submit to the dynamic table
+        await submitRowToTable(program.projectName, program.tableName, customValues)
+      } else {
+        // Default submission flow
+        await submitObservation({
+          selectedProgram,
+          observationType: observationType || undefined,
+          speciesName,
+          count,
+          notes: notes || undefined,
+          latitude,
+          longitude,
+          date,
+          time,
+          habitat: habitat || undefined,
+          confidence: confidence || undefined,
+        })
+      }
       setSubmitted(true)
     } catch {
       // stay on review step so user can retry
@@ -113,7 +198,8 @@ export function SubmissionForm() {
     }
   }
 
-  const validationResults: ValidationResult[] = [
+  // Validation for default form
+  const defaultValidationResults: ValidationResult[] = [
     {
       field: "Program",
       status: selectedProgram ? "pass" : "fail",
@@ -159,6 +245,31 @@ export function SubmissionForm() {
     },
   ]
 
+  // Validation for custom form
+  const customValidationResults: ValidationResult[] = formConfig
+    ? [
+        {
+          field: "Program",
+          status: selectedProgram ? "pass" : "fail",
+          message: selectedProgram ? "Program selected" : "No program selected",
+        },
+        ...formConfig
+          .filter((f) => f.required)
+          .map((f) => ({
+            field: f.label,
+            status: (customValues[f.fieldName]?.trim()
+              ? "pass"
+              : "fail") as ValidationResult["status"],
+            message: customValues[f.fieldName]?.trim()
+              ? "Filled"
+              : "Required field",
+          })),
+      ]
+    : []
+
+  const validationResults = hasCustomForm
+    ? customValidationResults
+    : defaultValidationResults
   const passCount = validationResults.filter((r) => r.status === "pass").length
   const hasFailures = validationResults.some((r) => r.status === "fail")
 
@@ -169,7 +280,7 @@ export function SubmissionForm() {
           <CheckCircle2 className="h-8 w-8 text-primary" />
         </div>
         <h2 className="mt-6 font-serif text-2xl font-bold text-foreground">
-          Observation Submitted
+          Data Submitted
         </h2>
         <p className="mt-3 text-muted-foreground">
           Your data has been received and will be quality-checked by the program
@@ -184,14 +295,27 @@ export function SubmissionForm() {
                 {activePrograms.find((p) => p.id === selectedProgram)?.title}
               </dd>
             </div>
-            <div className="flex justify-between">
-              <dt className="text-muted-foreground">Species / Subject</dt>
-              <dd className="font-medium text-foreground">{speciesName}</dd>
-            </div>
-            <div className="flex justify-between">
-              <dt className="text-muted-foreground">Count</dt>
-              <dd className="font-medium text-foreground">{count}</dd>
-            </div>
+            {hasCustomForm ? (
+              formConfig?.slice(0, 3).map((f) => (
+                <div key={f.fieldName} className="flex justify-between">
+                  <dt className="text-muted-foreground">{f.label}</dt>
+                  <dd className="font-medium text-foreground">
+                    {customValues[f.fieldName] || "—"}
+                  </dd>
+                </div>
+              ))
+            ) : (
+              <>
+                <div className="flex justify-between">
+                  <dt className="text-muted-foreground">Species / Subject</dt>
+                  <dd className="font-medium text-foreground">{speciesName}</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-muted-foreground">Count</dt>
+                  <dd className="font-medium text-foreground">{count}</dd>
+                </div>
+              </>
+            )}
             <div className="flex justify-between">
               <dt className="text-muted-foreground">Quality Score</dt>
               <dd className="font-medium text-primary">
@@ -214,6 +338,8 @@ export function SubmissionForm() {
               setObservationType("")
               setHabitat("")
               setConfidence("")
+              setFormConfig(null)
+              setCustomValues({})
             }}
           >
             Submit Another
@@ -306,7 +432,7 @@ export function SubmissionForm() {
                 {activePrograms.map((program) => (
                   <button
                     key={program.id}
-                    onClick={() => setSelectedProgram(program.id)}
+                    onClick={() => handleProgramSelect(program.id)}
                     className={cn(
                       "flex flex-col rounded-xl border p-5 text-left transition-all",
                       selectedProgram === program.id
@@ -335,11 +461,132 @@ export function SubmissionForm() {
                 ))}
               </div>
             )}
+
+            {loadingConfig && (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading form configuration...
+              </div>
+            )}
           </div>
         )}
 
-        {/* Step 2: Observation Details */}
-        {currentStep === 2 && (
+        {/* Step 2: Custom form fields (when form config exists) */}
+        {currentStep === 2 && hasCustomForm && (
+          <div className="space-y-6">
+            <div>
+              <h2 className="font-serif text-xl font-semibold text-foreground">
+                Fill in Data
+              </h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Complete the fields below for{" "}
+                <span className="font-medium text-foreground">
+                  {activePrograms.find((p) => p.id === selectedProgram)?.title}
+                </span>
+                .
+              </p>
+            </div>
+
+            <div className="grid gap-6 sm:grid-cols-2">
+              {formConfig.map((field) => {
+                const val = customValues[field.fieldName] || ""
+                const isNumeric = field.fieldType === "INT" || field.fieldType === "FLOAT"
+                const isBool = field.fieldType === "BOOLEAN"
+                const isDate = field.fieldType === "DATE"
+                const isText = field.fieldType === "TEXT"
+                const hasError =
+                  val !== "" &&
+                  ((field.fieldType === "INT" && (isNaN(Number(val)) || !Number.isInteger(Number(val)))) ||
+                    (field.fieldType === "FLOAT" && isNaN(Number(val))))
+
+                return (
+                  <div
+                    key={field.fieldName}
+                    className={isText ? "sm:col-span-2 space-y-2" : "space-y-2"}
+                  >
+                    <Label htmlFor={`custom-${field.fieldName}`}>
+                      {field.label}
+                      {field.required && (
+                        <span className="text-destructive"> *</span>
+                      )}
+                      <span className="ml-1.5 inline-flex rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase text-muted-foreground">
+                        {field.fieldType === "INT"
+                          ? "integer"
+                          : field.fieldType === "FLOAT"
+                          ? "decimal"
+                          : field.fieldType === "BOOLEAN"
+                          ? "yes / no"
+                          : field.fieldType === "DATE"
+                          ? "date"
+                          : field.fieldType === "TEXT"
+                          ? "long input"
+                          : "short input"}
+                      </span>
+                    </Label>
+                    {isBool ? (
+                      <Select
+                        value={val}
+                        onValueChange={(v) =>
+                          setCustomValues((prev) => ({
+                            ...prev,
+                            [field.fieldName]: v,
+                          }))
+                        }
+                      >
+                        <SelectTrigger id={`custom-${field.fieldName}`}>
+                          <SelectValue placeholder="Select..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="true">Yes</SelectItem>
+                          <SelectItem value="false">No</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    ) : isText ? (
+                      <Textarea
+                        id={`custom-${field.fieldName}`}
+                        placeholder={field.label}
+                        value={val}
+                        onChange={(e) =>
+                          setCustomValues((prev) => ({
+                            ...prev,
+                            [field.fieldName]: e.target.value,
+                          }))
+                        }
+                        rows={3}
+                      />
+                    ) : (
+                      <Input
+                        id={`custom-${field.fieldName}`}
+                        type={isDate ? "date" : isNumeric ? "number" : "text"}
+                        step={field.fieldType === "FLOAT" ? "any" : undefined}
+                        placeholder={field.label}
+                        value={val}
+                        onChange={(e) =>
+                          setCustomValues((prev) => ({
+                            ...prev,
+                            [field.fieldName]: e.target.value,
+                          }))
+                        }
+                        className={hasError ? "border-destructive" : ""}
+                      />
+                    )}
+                    {hasError && (
+                      <p className="flex items-center gap-1 text-xs text-destructive">
+                        <AlertCircle className="h-3 w-3" />
+                        {field.fieldType === "INT"
+                          ? "Must be a whole number"
+                          : "Must be a valid number"}
+                      </p>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Step 2: Observation Details (default form, no custom config) */}
+        {currentStep === 2 && !hasCustomForm && (
           <div className="space-y-6">
             <div>
               <h2 className="font-serif text-xl font-semibold text-foreground">
@@ -439,8 +686,8 @@ export function SubmissionForm() {
           </div>
         )}
 
-        {/* Step 3: Location & Media */}
-        {currentStep === 3 && (
+        {/* Step 3: Location & Media (default form only) */}
+        {currentStep === 3 && !hasCustomForm && (
           <div className="space-y-6">
             <div>
               <h2 className="font-serif text-xl font-semibold text-foreground">
@@ -565,8 +812,8 @@ export function SubmissionForm() {
           </div>
         )}
 
-        {/* Step 4: Review */}
-        {currentStep === 4 && (
+        {/* Review step (works for both default and custom forms) */}
+        {currentStep === reviewStep && (
           <div className="space-y-6">
             <div>
               <h2 className="font-serif text-xl font-semibold text-foreground">
@@ -645,58 +892,77 @@ export function SubmissionForm() {
                       ?.title || "Not selected"}
                   </dd>
                 </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">Type</dt>
-                  <dd className="mt-0.5 font-medium text-foreground capitalize">
-                    {observationType || "Not specified"}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">
-                    Species / Subject
-                  </dt>
-                  <dd className="mt-0.5 font-medium text-foreground">
-                    {speciesName || "Not entered"}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">Count</dt>
-                  <dd className="mt-0.5 font-medium text-foreground">
-                    {count || "Not entered"}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">Location</dt>
-                  <dd className="mt-0.5 font-medium text-foreground">
-                    {latitude && longitude
-                      ? latitude + ", " + longitude
-                      : "Not captured"}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">
-                    Date / Time
-                  </dt>
-                  <dd className="mt-0.5 font-medium text-foreground">
-                    {date} {time}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">Habitat</dt>
-                  <dd className="mt-0.5 font-medium text-foreground capitalize">
-                    {habitat || "Not specified"}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">
-                    Confidence
-                  </dt>
-                  <dd className="mt-0.5 font-medium text-foreground capitalize">
-                    {confidence || "Not specified"}
-                  </dd>
-                </div>
+                {hasCustomForm ? (
+                  formConfig.map((f) => (
+                    <div key={f.fieldName}>
+                      <dt className="text-xs text-muted-foreground">
+                        {f.label}
+                      </dt>
+                      <dd className="mt-0.5 font-medium text-foreground">
+                        {customValues[f.fieldName] || "Not entered"}
+                      </dd>
+                    </div>
+                  ))
+                ) : (
+                  <>
+                    <div>
+                      <dt className="text-xs text-muted-foreground">Type</dt>
+                      <dd className="mt-0.5 font-medium text-foreground capitalize">
+                        {observationType || "Not specified"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-muted-foreground">
+                        Species / Subject
+                      </dt>
+                      <dd className="mt-0.5 font-medium text-foreground">
+                        {speciesName || "Not entered"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-muted-foreground">Count</dt>
+                      <dd className="mt-0.5 font-medium text-foreground">
+                        {count || "Not entered"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-muted-foreground">
+                        Location
+                      </dt>
+                      <dd className="mt-0.5 font-medium text-foreground">
+                        {latitude && longitude
+                          ? latitude + ", " + longitude
+                          : "Not captured"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-muted-foreground">
+                        Date / Time
+                      </dt>
+                      <dd className="mt-0.5 font-medium text-foreground">
+                        {date} {time}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-muted-foreground">
+                        Habitat
+                      </dt>
+                      <dd className="mt-0.5 font-medium text-foreground capitalize">
+                        {habitat || "Not specified"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-muted-foreground">
+                        Confidence
+                      </dt>
+                      <dd className="mt-0.5 font-medium text-foreground capitalize">
+                        {confidence || "Not specified"}
+                      </dd>
+                    </div>
+                  </>
+                )}
               </dl>
-              {notes && (
+              {notes && !hasCustomForm && (
                 <div className="mt-4 border-t border-border pt-3">
                   <dt className="text-xs text-muted-foreground">Notes</dt>
                   <dd className="mt-1 text-sm text-foreground">{notes}</dd>
@@ -717,8 +983,17 @@ export function SubmissionForm() {
             Back
           </Button>
 
-          {currentStep < 4 ? (
-            <Button onClick={() => setCurrentStep((s) => s + 1)}>
+          {currentStep < reviewStep ? (
+            <Button
+              onClick={() => setCurrentStep((s) => s + 1)}
+              disabled={
+                (currentStep === 1 && (!selectedProgram || loadingConfig)) ||
+                (currentStep === 2 && hasTypeErrors)
+              }
+            >
+              {loadingConfig && (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              )}
               Continue
               <ChevronRight className="ml-2 h-4 w-4" />
             </Button>

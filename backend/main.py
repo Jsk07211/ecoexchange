@@ -2,10 +2,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
 from backend.database import Base, async_session, engine
-from backend.db_models import DatasetDB, ProgramDB, SubmissionDB  # noqa: F401
-from backend.routes import datasets, dynamic_tables, programs, submissions, uploads
+from backend.db_models import DatasetDB, FormConfigDB, ProgramDB, SubmissionDB  # noqa: F401
+from backend.routes import datasets, dynamic_tables, form_configs, programs, submissions, uploads
 from backend.seed import seed
 
 
@@ -13,6 +14,13 @@ from backend.seed import seed
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Add columns that may be missing from older schema versions
+        await conn.execute(
+            text("ALTER TABLE programs ADD COLUMN IF NOT EXISTS project_name VARCHAR")
+        )
+        await conn.execute(
+            text("ALTER TABLE programs ADD COLUMN IF NOT EXISTS table_name VARCHAR")
+        )
     async with async_session() as session:
         await seed(session)
     yield
@@ -34,6 +42,7 @@ app.include_router(datasets.router)
 app.include_router(submissions.router)
 app.include_router(uploads.router)
 app.include_router(dynamic_tables.router)
+app.include_router(form_configs.router)
 
 
 @app.get("/api/categories")

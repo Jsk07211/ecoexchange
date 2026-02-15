@@ -255,7 +255,7 @@ export function ProgramCatalog() {
                 {/* Actions */}
                 <div className="mt-4 flex gap-2">
                   <Button size="sm" className="flex-1" asChild>
-                    <Link href="/submit">Contribute</Link>
+                    <Link href={`/submit?program=${program.id}`}>Contribute</Link>
                   </Button>
                   <Button size="sm" variant="outline" className="flex-1" asChild>
                     <Link href="/datasets">View Data</Link>

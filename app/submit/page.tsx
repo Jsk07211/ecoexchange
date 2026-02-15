@@ -6,6 +6,11 @@ export const metadata = {
     "Submit citizen-science observations with guided forms and real-time quality validation.",
 }
 
-export default function SubmitPage() {
-  return <SubmissionForm />
+export default async function SubmitPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ program?: string }>
+}) {
+  const params = await searchParams
+  return <SubmissionForm programId={params.program} />
 }

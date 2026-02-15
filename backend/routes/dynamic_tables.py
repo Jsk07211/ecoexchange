@@ -1,9 +1,15 @@
 import os
 import re
+import uuid
+from datetime import date, timezone, datetime
 
 import asyncpg
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.database import get_db
+from backend.db_models import DatasetDB, ProgramDB
 from backend.models.dynamic_table import DynamicTableRequest
 
 router = APIRouter(prefix="/api", tags=["dynamic-tables"])
@@ -88,3 +94,119 @@ async def create_dynamic_table(req: DynamicTableRequest):
         "table": table_name,
         "columns": columns,
     }
+
+
+@router.post("/tables/{project_name}/{table_name}/rows")
+async def insert_row(
+    project_name: str,
+    table_name: str,
+    data: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    db_name = project_name.lower()
+    tbl = table_name.lower()
+
+    _validate_identifier(db_name, "project_name")
+    _validate_identifier(tbl, "table_name")
+    for key in data:
+        _validate_identifier(key, "field name")
+
+    conn_params = _parse_conn_params()
+    base_dsn = conn_params["dsn"]
+    project_dsn = "/".join(base_dsn.rsplit("/", 1)[:-1]) + f"/{db_name}"
+
+    # Insert the row into the dynamic table
+    project_conn = await asyncpg.connect(dsn=project_dsn)
+    try:
+        # Query column types so we can cast string values from the form
+        col_types = {}
+        rows = await project_conn.fetch(
+            "SELECT column_name, data_type FROM information_schema.columns "
+            "WHERE table_name = $1",
+            tbl,
+        )
+        for r in rows:
+            col_types[r["column_name"]] = r["data_type"]
+
+        # Cast values to match column types
+        cast_values = []
+        for k, v in data.items():
+            dt = col_types.get(k, "character varying")
+            if v == "" or v is None:
+                cast_values.append(None)
+            elif dt == "integer":
+                cast_values.append(int(v))
+            elif dt == "double precision":
+                cast_values.append(float(v))
+            elif dt == "boolean":
+                cast_values.append(str(v).lower() in ("true", "1", "yes"))
+            elif dt == "date":
+                cast_values.append(date.fromisoformat(str(v)))
+            else:
+                cast_values.append(str(v))
+
+        columns = ", ".join(f'"{k}"' for k in data)
+        placeholders = ", ".join(f"${i+1}" for i in range(len(data)))
+        sql = f'INSERT INTO "{tbl}" ({columns}) VALUES ({placeholders}) RETURNING id'
+        row_id = await project_conn.fetchval(sql, *cast_values)
+    finally:
+        await project_conn.close()
+
+    # Count total rows in the dynamic table
+    project_conn = await asyncpg.connect(dsn=project_dsn)
+    try:
+        total = await project_conn.fetchval(f'SELECT COUNT(*) FROM "{tbl}"')
+    finally:
+        await project_conn.close()
+
+    # Find the program that owns this table
+    result = await db.execute(
+        select(ProgramDB).where(
+            ProgramDB.project_name == project_name,
+            ProgramDB.table_name == table_name,
+        )
+    )
+    program = result.scalars().first()
+
+    # Upsert a DatasetDB row so the dataset page shows this data
+    if program:
+        result = await db.execute(
+            select(DatasetDB).where(DatasetDB.id == f"ds-{program.id}")
+        )
+        existing = result.scalars().first()
+        today = date.today().isoformat()
+
+        # Quality score: percentage of non-empty fields in this submission
+        filled = sum(1 for v in data.values() if str(v).strip())
+        score = round(filled / max(len(data), 1) * 100)
+
+        if existing:
+            existing.records = total
+            existing.last_updated = today
+            # Running average of quality scores
+            existing.quality_score = round(
+                (existing.quality_score * (total - 1) + score) / total
+            )
+        else:
+            ds = DatasetDB(
+                id=f"ds-{program.id}",
+                title=f"{program.title} Dataset",
+                program=program.title,
+                organization=program.organization,
+                category=program.category,
+                records=total,
+                format="Dynamic Table",
+                license="CC BY 4.0",
+                last_updated=today,
+                quality_score=score,
+                downloads=0,
+                description=program.description or f"Data collected for {program.title}",
+                tags=program.tags or [],
+            )
+            db.add(ds)
+
+        # Also update the program's data_points count
+        program.data_points = total
+        await db.commit()
+
+    return {"status": "ok", "id": row_id, "total_records": total}

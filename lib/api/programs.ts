@@ -1,5 +1,5 @@
 import { apiFetch } from "./client"
-import type { Program } from "../types"
+import type { Program, ProgramCreate } from "../types"
 
 interface ProgramParams {
   category?: string
@@ -27,6 +27,25 @@ export async function getProgram(id: string): Promise<Program> {
   return mapProgram(data)
 }
 
+export async function createProgram(data: ProgramCreate): Promise<Program> {
+  const body = {
+    title: data.title,
+    organization: data.organization,
+    category: data.category,
+    description: data.description,
+    location: data.location,
+    tags: data.tags,
+    project_name: data.projectName,
+    table_name: data.tableName,
+  }
+  const res = await apiFetch<Record<string, unknown>>("/api/programs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  return mapProgram(res)
+}
+
 function mapProgram(p: Record<string, unknown>): Program {
   return {
     id: p.id as string,
@@ -40,5 +59,7 @@ function mapProgram(p: Record<string, unknown>): Program {
     status: p.status as Program["status"],
     tags: p.tags as string[],
     deadline: p.deadline as string | undefined,
+    projectName: p.project_name as string | undefined,
+    tableName: p.table_name as string | undefined,
   }
 }

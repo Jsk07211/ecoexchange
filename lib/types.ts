@@ -10,6 +10,19 @@ export interface Program {
   status: "active" | "upcoming" | "completed"
   tags: string[]
   deadline?: string
+  projectName?: string
+  tableName?: string
+}
+
+export interface ProgramCreate {
+  title: string
+  organization: string
+  category: string
+  description: string
+  location: string
+  tags: string[]
+  projectName?: string
+  tableName?: string
 }
 
 export interface Dataset {
@@ -45,4 +58,47 @@ export interface Submission {
 export interface SubmissionResponse extends Submission {
   id: string
   submittedAt: string
+}
+
+export type FieldType = "INT" | "STRING" | "FLOAT" | "BOOLEAN" | "DATE" | "TEXT"
+
+export interface FieldDefinition {
+  name: string
+  type: FieldType
+}
+
+export interface DynamicTableRequest {
+  projectName: string
+  tableName: string
+  fields: FieldDefinition[]
+}
+
+export interface DynamicTableResponse {
+  status: string
+  database: string
+  table: string
+  columns: string[]
+}
+
+export interface FormFieldConfig {
+  fieldName: string
+  label: string
+  fieldType: FieldType
+  visible: boolean
+  required: boolean
+  order: number
+}
+
+export interface FormConfigRequest {
+  projectName: string
+  tableName: string
+  fields: FormFieldConfig[]
+}
+
+export interface FormConfigResponse {
+  id: string
+  projectName: string
+  tableName: string
+  fields: FormFieldConfig[]
+  createdAt: string
 }

@@ -14,3 +14,16 @@ class Program(BaseModel):
     status: Literal["active", "upcoming", "completed"]
     tags: list[str]
     deadline: Optional[str] = None
+    project_name: Optional[str] = None
+    table_name: Optional[str] = None
+
+
+class ProgramCreate(BaseModel):
+    title: str
+    organization: str = ""
+    category: str = "Biodiversity"
+    description: str = ""
+    location: str = ""
+    tags: list[str] = []
+    project_name: Optional[str] = None
+    table_name: Optional[str] = None

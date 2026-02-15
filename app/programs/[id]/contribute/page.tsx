@@ -9,6 +9,8 @@ import {
   Upload,
   CheckCircle2,
   FileSpreadsheet,
+  ImageIcon,
+  X,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -26,7 +28,16 @@ import {
 import { getProgram } from "@/lib/api/programs"
 import { getProjectTables } from "@/lib/api/tables"
 import { insertRow, insertRowsBatch } from "@/lib/api/tables"
+import { uploadFiles } from "@/lib/api/uploads"
 import type { Program, ContributionField } from "@/lib/types"
+
+interface ImagePreview {
+  file: File
+  localUrl: string
+  serverUrl?: string
+  species: string
+  description: string
+}
 
 function fieldInput(
   field: ContributionField,
@@ -115,6 +126,12 @@ export default function ContributePage() {
   const [csvError, setCsvError] = useState<string | null>(null)
   const [batchSubmitting, setBatchSubmitting] = useState(false)
   const [batchResult, setBatchResult] = useState<number | null>(null)
+
+  // Image upload state
+  const [imagePreviews, setImagePreviews] = useState<ImagePreview[]>([])
+  const [imageUploading, setImageUploading] = useState(false)
+  const [imageError, setImageError] = useState<string | null>(null)
+  const [imageUploadDone, setImageUploadDone] = useState(false)
 
   useEffect(() => {
     async function load() {
@@ -247,6 +264,71 @@ export default function ContributePage() {
     }
   }, [program, tableName, csvRows, id])
 
+  const handleImageSelect = useCallback((fileList: FileList) => {
+    const accepted = Array.from(fileList).filter((f) =>
+      ["image/jpeg", "image/png", "image/webp"].includes(f.type)
+    )
+    if (accepted.length === 0) return
+    setImageError(null)
+    setImageUploadDone(false)
+    const newPreviews: ImagePreview[] = accepted.map((file) => ({
+      file,
+      localUrl: URL.createObjectURL(file),
+      species: "",
+      description: "",
+    }))
+    setImagePreviews((prev) => [...prev, ...newPreviews])
+  }, [])
+
+  const updateImageLabel = useCallback((index: number, field: "species" | "description", value: string) => {
+    setImagePreviews((prev) =>
+      prev.map((p, i) => (i === index ? { ...p, [field]: value } : p))
+    )
+  }, [])
+
+  const removeImage = useCallback((index: number) => {
+    setImagePreviews((prev) => {
+      const removed = prev[index]
+      URL.revokeObjectURL(removed.localUrl)
+      return prev.filter((_, i) => i !== index)
+    })
+  }, [])
+
+  const handleImageUpload = useCallback(async () => {
+    if (imagePreviews.length === 0) return
+    setImageUploading(true)
+    setImageError(null)
+    setImageUploadDone(false)
+    try {
+      const files = imagePreviews.map((p) => p.file)
+      const res = await uploadFiles(files, id)
+      setImagePreviews((prev) =>
+        prev.map((p, i) => ({
+          ...p,
+          serverUrl: res.results[i]?.url ?? undefined,
+        }))
+      )
+
+      // Insert each uploaded image as a row in the bird_images table
+      for (let i = 0; i < res.results.length; i++) {
+        const result = res.results[i]
+        const preview = imagePreviews[i]
+        if (result.accepted && result.url) {
+          const row: Record<string, unknown> = { image_url: result.url }
+          if (preview?.species) row.species = preview.species
+          if (preview?.description) row.description = preview.description
+          await insertRow(id, "bird_images", row)
+        }
+      }
+
+      setImageUploadDone(true)
+    } catch (err) {
+      setImageError(err instanceof Error ? err.message : "Image upload failed")
+    } finally {
+      setImageUploading(false)
+    }
+  }, [imagePreviews, id])
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -286,6 +368,7 @@ export default function ContributePage() {
   }
 
   const spec = program.contributionSpec
+  const acceptsImages = spec.accepted_files?.includes("image")
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-10 lg:px-8">
@@ -307,6 +390,9 @@ export default function ContributePage() {
         <TabsList>
           <TabsTrigger value="single">Single Entry</TabsTrigger>
           <TabsTrigger value="batch">Batch Upload</TabsTrigger>
+          {acceptsImages && (
+            <TabsTrigger value="images">Images</TabsTrigger>
+          )}
         </TabsList>
 
         {/* Single Entry Tab */}
@@ -447,6 +533,125 @@ export default function ContributePage() {
             </div>
           )}
         </TabsContent>
+
+        {/* Images Tab */}
+        {acceptsImages && (
+          <TabsContent value="images" className="mt-6 space-y-4">
+            <div
+              className="flex cursor-pointer flex-col items-center gap-2 rounded-xl border-2 border-dashed border-border p-8 text-center transition-colors hover:border-primary/40"
+              onDragOver={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+              }}
+              onDrop={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                if (e.dataTransfer.files.length > 0) {
+                  handleImageSelect(e.dataTransfer.files)
+                }
+              }}
+              onClick={() => {
+                const input = document.createElement("input")
+                input.type = "file"
+                input.accept = "image/jpeg,image/png,image/webp"
+                input.multiple = true
+                input.onchange = () => {
+                  if (input.files && input.files.length > 0) {
+                    handleImageSelect(input.files)
+                  }
+                }
+                input.click()
+              }}
+            >
+              <ImageIcon className="h-8 w-8 text-muted-foreground" />
+              <p className="text-sm font-medium text-foreground">
+                Drop images here or click to browse
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Accepts JPG, PNG, and WebP
+              </p>
+            </div>
+
+            {imageError && (
+              <div className="rounded-lg border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+                {imageError}
+              </div>
+            )}
+
+            {imagePreviews.length > 0 && (
+              <>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  {imagePreviews.map((img, i) => (
+                    <div key={i} className="group relative overflow-hidden rounded-lg border border-border">
+                      <div className="relative aspect-video">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={img.serverUrl ? `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}${img.serverUrl}` : img.localUrl}
+                          alt={img.file.name}
+                          className="h-full w-full object-cover"
+                        />
+                        {!imageUploadDone && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              removeImage(i)
+                            }}
+                            className="absolute right-1 top-1 rounded-full bg-black/60 p-1 text-white opacity-0 transition-opacity group-hover:opacity-100"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                        {img.serverUrl && (
+                          <div className="absolute bottom-0 left-0 right-0 bg-primary/80 px-2 py-0.5 text-center text-xs text-primary-foreground">
+                            Uploaded
+                          </div>
+                        )}
+                      </div>
+                      <div className="space-y-2 p-3">
+                        <Input
+                          placeholder="Species name"
+                          value={img.species}
+                          onChange={(e) => updateImageLabel(i, "species", e.target.value)}
+                          disabled={imageUploadDone}
+                        />
+                        <Input
+                          placeholder="Description (optional)"
+                          value={img.description}
+                          onChange={(e) => updateImageLabel(i, "description", e.target.value)}
+                          disabled={imageUploadDone}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {!imageUploadDone && (
+                  <Button onClick={handleImageUpload} disabled={imageUploading}>
+                    {imageUploading ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Uploading...
+                      </>
+                    ) : (
+                      <>
+                        <Upload className="mr-2 h-4 w-4" />
+                        Upload {imagePreviews.length} image{imagePreviews.length !== 1 ? "s" : ""}
+                      </>
+                    )}
+                  </Button>
+                )}
+
+                {imageUploadDone && (
+                  <div className="flex items-center gap-1.5 text-sm text-primary">
+                    <CheckCircle2 className="h-4 w-4" />
+                    {imagePreviews.length} image{imagePreviews.length !== 1 ? "s" : ""} uploaded successfully
+                  </div>
+                )}
+              </>
+            )}
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   )

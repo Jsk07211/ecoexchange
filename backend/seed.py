@@ -46,6 +46,9 @@ async def seed(session: AsyncSession) -> None:
     # Seed the dynamic sightings table for urban_bird_census
     await _seed_sightings()
 
+    # Create the bird_images table for urban_bird_census
+    await _seed_bird_images_table()
+
 
 async def _seed_sightings() -> None:
     db_name = "urban_bird_census"
@@ -87,5 +90,26 @@ async def _seed_sightings() -> None:
                 """,
                 _SIGHTINGS,
             )
+    finally:
+        await project_conn.close()
+
+
+async def _seed_bird_images_table() -> None:
+    db_name = "urban_bird_census"
+
+    project_conn = await asyncpg.connect(dsn=_project_dsn(db_name))
+    try:
+        await project_conn.execute("""
+            CREATE TABLE IF NOT EXISTS bird_images (
+                id SERIAL PRIMARY KEY,
+                image_url TEXT NOT NULL,
+                species VARCHAR(255),
+                description TEXT,
+                latitude DOUBLE PRECISION,
+                longitude DOUBLE PRECISION,
+                observed_on DATE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
     finally:
         await project_conn.close()

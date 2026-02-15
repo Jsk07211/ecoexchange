@@ -1,6 +1,11 @@
+import os
+import uuid
+
 from fastapi import APIRouter, UploadFile, File, Form
 
 from backend.models.upload import UploadFilterResult, UploadResponse
+
+UPLOAD_DIR = "/app/uploads"
 
 router = APIRouter(prefix="/api/uploads", tags=["uploads"])
 
@@ -57,6 +62,16 @@ async def upload_files(
         contents = await f.read()
         file_type = _detect_file_type(f.content_type or "", f.filename or "")
         result = await _ai_filter(f, file_type, contents)
+
+        if result.accepted and file_type == "image":
+            ext = (f.filename or "").rsplit(".", 1)[-1].lower() if "." in (f.filename or "") else "bin"
+            save_name = f"{uuid.uuid4().hex}.{ext}"
+            program_dir = os.path.join(UPLOAD_DIR, program_id)
+            os.makedirs(program_dir, exist_ok=True)
+            with open(os.path.join(program_dir, save_name), "wb") as fp:
+                fp.write(contents)
+            result.url = f"/uploads/{program_id}/{save_name}"
+
         results.append(result)
 
     accepted = sum(1 for r in results if r.accepted)

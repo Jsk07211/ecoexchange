@@ -19,6 +19,7 @@ class UploadFilterResult(BaseModel):
     accepted: bool
     reason: Optional[str] = None
     # placeholder for future AI metadata
+    url: Optional[str] = None
     ai_tags: list[str] = []
     ai_confidence: Optional[float] = None
 

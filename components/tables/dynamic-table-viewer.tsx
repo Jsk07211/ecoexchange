@@ -40,13 +40,22 @@ function typeLabel(pgType: string): string {
   return map[pgType] ?? pgType
 }
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+
+/** Check if a string looks like an uploaded image path. */
+function isImageUrl(value: string): boolean {
+  return /^\/uploads\/.*\.(jpe?g|png|webp)$/i.test(value)
+}
+
 /** Render a cell value based on its column type. */
 function CellValue({
   value,
   type,
+  columnName,
 }: {
   value: unknown
   type: string
+  columnName: string
 }) {
   if (value === null || value === undefined) {
     return <span className="text-muted-foreground/50">null</span>
@@ -72,8 +81,22 @@ function CellValue({
     )
   }
 
-  // string / text / fallback
+  // Render image preview for upload paths
   const str = String(value)
+  if ((columnName === "image_url" || label === "text") && isImageUrl(str)) {
+    return (
+      <a href={`${API_BASE}${str}`} target="_blank" rel="noopener noreferrer">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={`${API_BASE}${str}`}
+          alt="uploaded image"
+          className="h-12 w-12 rounded object-cover transition-transform hover:scale-150"
+        />
+      </a>
+    )
+  }
+
+  // string / text / fallback
   if (str.length > 80) {
     return <span title={str}>{str.slice(0, 77)}...</span>
   }
@@ -224,6 +247,7 @@ export function DynamicTableViewer({
                       <CellValue
                         value={row[col.name]}
                         type={col.type}
+                        columnName={col.name}
                       />
                     </TableCell>
                   ))}

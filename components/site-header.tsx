@@ -55,9 +55,6 @@ export function SiteHeader() {
           <Button variant="outline" size="sm" asChild>
             <Link href="/programs">Browse Programs</Link>
           </Button>
-          <Button size="sm" asChild>
-            <Link href="/programs">Contribute Data</Link>
-          </Button>
         </div>
 
         {/* Mobile toggle */}
@@ -101,11 +98,6 @@ export function SiteHeader() {
             <Button variant="outline" size="sm" asChild>
               <Link href="/programs" onClick={() => setMobileOpen(false)}>
                 Browse Programs
-              </Link>
-            </Button>
-            <Button size="sm" asChild>
-              <Link href="/programs" onClick={() => setMobileOpen(false)}>
-                Contribute Data
               </Link>
             </Button>
           </div>

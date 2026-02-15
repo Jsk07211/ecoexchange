@@ -6,6 +6,7 @@ export interface UploadFilterResult {
   size: number
   accepted: boolean
   reason: string | null
+  url: string | null
   aiTags: string[]
   aiConfidence: number | null
 }
@@ -46,6 +47,7 @@ export async function uploadFiles(
       size: r.size,
       accepted: r.accepted,
       reason: r.reason,
+      url: r.url,
       aiTags: r.ai_tags,
       aiConfidence: r.ai_confidence,
     })),

@@ -1,8 +1,10 @@
+import os
 from contextlib import asynccontextmanager
 
 import sqlalchemy
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from backend.database import Base, async_session, engine
 from backend.db_models import DatasetDB, ProgramDB, SubmissionDB  # noqa: F401
@@ -41,6 +43,10 @@ app.include_router(datasets.router)
 app.include_router(submissions.router)
 app.include_router(uploads.router)
 app.include_router(dynamic_tables.router)
+
+
+os.makedirs("/app/uploads", exist_ok=True)
+app.mount("/uploads", StaticFiles(directory="/app/uploads"), name="uploads")
 
 
 @app.get("/api/categories")

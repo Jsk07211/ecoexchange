@@ -22,6 +22,8 @@ services:
       - "8000:8000"
     environment:
       - DATABASE_URL=postgresql+asyncpg://eco:eco@db:5432/ecoexchange
+    volumes:
+      - uploads:/app/uploads
     depends_on:
       db:
         condition: service_healthy
@@ -38,3 +40,4 @@ services:
 
 volumes:
   pgdata:
+  uploads:

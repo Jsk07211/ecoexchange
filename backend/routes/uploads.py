@@ -1,14 +1,20 @@
+import asyncio
 import os
 import re
 import uuid
 
+import httpx
 from fastapi import APIRouter, Depends, UploadFile, File, Form
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
 from backend.db_models import ProgramDB
-from backend.models.upload import CnnResult, QualityScanResult, QualityWarning, UploadFilterResult, UploadResponse
+from backend.models.upload import (
+    CnnResult, QualityScanResult, QualityWarning,
+    ScanUrlRequest, ScanUrlResponse, ScanUrlResult,
+    UploadFilterResult, UploadResponse,
+)
 from backend.qualify_image import check_quality
 
 UPLOAD_DIR = "/app/uploads"
@@ -170,3 +176,81 @@ async def upload_files(
         program_id=program_id,
         results=results,
     )
+
+
+async def _scan_single_url(
+    client: httpx.AsyncClient,
+    semaphore: asyncio.Semaphore,
+    url: str,
+    cnn_filter: str | None,
+) -> ScanUrlResult:
+    async with semaphore:
+        try:
+            resp = await client.get(url, follow_redirects=True, timeout=30.0)
+            resp.raise_for_status()
+            contents = resp.content
+
+            # Quality check
+            quality_raw = check_quality(contents)
+            warnings = [QualityWarning(**w) for w in quality_raw["warnings"]]
+            quality = QualityScanResult(
+                score=quality_raw["score"],
+                passed=quality_raw["passed"],
+                reason="; ".join(w.message for w in warnings) if warnings else "Good",
+                warnings=warnings,
+            )
+
+            # CNN check
+            cnn_result = None
+            if cnn_filter:
+                try:
+                    from backend.classify_image import check_category
+                    cnn_data = check_category(contents, cnn_filter)
+                    cnn_result = CnnResult(
+                        label=cnn_data["label"],
+                        confidence=cnn_data["confidence"],
+                        matches=cnn_data["matches"],
+                        expected_category=cnn_data["expected_category"],
+                        message=cnn_data["message"],
+                    )
+                except Exception:
+                    pass
+
+            return ScanUrlResult(url=url, quality=quality, cnn=cnn_result)
+        except Exception as exc:
+            return ScanUrlResult(url=url, error=str(exc))
+
+
+@router.post("/scan-urls", response_model=ScanUrlResponse)
+async def scan_image_urls(
+    body: ScanUrlRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    # Look up CNN filter for the program
+    cnn_filter: str | None = None
+    result = await db.execute(select(ProgramDB).where(ProgramDB.id == body.program_id))
+    program = result.scalars().first()
+    if not program:
+        result = await db.execute(
+            select(ProgramDB).where(ProgramDB.project_name == body.program_id)
+        )
+        program = result.scalars().first()
+    if program:
+        if body.table_name and program.table_cnn and body.table_name in program.table_cnn:
+            cnn_filter = program.table_cnn[body.table_name]
+        else:
+            cnn_filter = program.cnn_filter
+
+    semaphore = asyncio.Semaphore(5)
+    async with httpx.AsyncClient() as client:
+        tasks = [
+            _scan_single_url(client, semaphore, url, cnn_filter)
+            for url in body.urls
+        ]
+        scan_results = await asyncio.gather(*tasks)
+
+    results_dict: dict[str, ScanUrlResult] = {}
+    for sr in scan_results:
+        results_dict[sr.url] = sr
+
+    return ScanUrlResponse(results=results_dict)

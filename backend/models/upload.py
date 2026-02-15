@@ -65,3 +65,20 @@ class UploadResponse(BaseModel):
     rejected: int
     program_id: str
     results: list[UploadFilterResult]
+
+
+class ScanUrlRequest(BaseModel):
+    urls: list[str]
+    program_id: str
+    table_name: Optional[str] = None
+
+
+class ScanUrlResult(BaseModel):
+    url: str
+    quality: QualityScanResult = Field(default_factory=QualityScanResult)
+    cnn: Optional[CnnResult] = None
+    error: Optional[str] = None
+
+
+class ScanUrlResponse(BaseModel):
+    results: dict[str, ScanUrlResult]

@@ -92,3 +92,60 @@ export async function uploadFiles(
     })),
   }
 }
+
+export interface ScanUrlResult {
+  url: string
+  quality: QualityScanResult
+  cnn: CnnResult | null
+  error: string | null
+}
+
+export interface ScanUrlResponse {
+  results: Record<string, ScanUrlResult>
+}
+
+function parseScanUrlResult(r: Record<string, unknown>): ScanUrlResult {
+  const q = r.quality as Record<string, unknown>
+  const c = r.cnn as Record<string, unknown> | null
+  return {
+    url: r.url as string,
+    quality: {
+      score: q.score as number,
+      passed: q.passed as boolean,
+      reason: q.reason as string,
+      warnings: (q.warnings as QualityWarning[]) ?? [],
+    },
+    cnn: c ? {
+      label: c.label as string,
+      confidence: c.confidence as number,
+      matches: c.matches as boolean,
+      expectedCategory: c.expected_category as string,
+      message: c.message as string,
+    } : null,
+    error: (r.error as string) ?? null,
+  }
+}
+
+export async function scanImageUrls(
+  urls: string[],
+  programId: string,
+  tableName?: string
+): Promise<ScanUrlResponse> {
+  const res = await fetch(`${API_BASE}/api/uploads/scan-urls`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      urls,
+      program_id: programId,
+      table_name: tableName ?? null,
+    }),
+  })
+  if (!res.ok) throw new Error(`Scan failed: ${res.status}`)
+
+  const data = await res.json()
+  const results: Record<string, ScanUrlResult> = {}
+  for (const [url, r] of Object.entries(data.results)) {
+    results[url] = parseScanUrlResult(r as Record<string, unknown>)
+  }
+  return { results }
+}

@@ -30,7 +30,7 @@ import {
 import { getProgram } from "@/lib/api/programs"
 import { getProjectTables, getTableSchema } from "@/lib/api/tables"
 import { insertRow, insertRowsBatch } from "@/lib/api/tables"
-import { uploadFiles, type CnnResult } from "@/lib/api/uploads"
+import { uploadFiles, scanImageUrls, type CnnResult, type ScanUrlResult } from "@/lib/api/uploads"
 import type { Program, ContributionField } from "@/lib/types"
 
 function fieldInput(
@@ -81,17 +81,66 @@ function fieldInput(
   )
 }
 
-function parseCsv(text: string): Record<string, string>[] {
+function parseDelimited(text: string, delimiter: string = ","): Record<string, string>[] {
   const lines = text.trim().split("\n")
   if (lines.length < 2) return []
-  const headers = lines[0].split(",").map((h) => h.trim())
+  const headers = lines[0].split(delimiter).map((h) => h.trim())
   return lines.slice(1).map((line) => {
-    const values = line.split(",").map((v) => v.trim())
+    const values = line.split(delimiter).map((v) => v.trim())
     const row: Record<string, string> = {}
     headers.forEach((h, i) => {
       row[h] = values[i] ?? ""
     })
     return row
+  })
+}
+
+/** Normalize a column name for fuzzy matching: lowercase and strip underscores. */
+function normalizeColName(name: string): string {
+  return name.toLowerCase().replace(/_/g, "")
+}
+
+/**
+ * Remap parsed row keys to match DB schema column names.
+ * e.g. TSV "taxonid" → DB "taxon_id", TSV "ranklevel" → DB "rank_level"
+ */
+function remapColumns(
+  rows: Record<string, string>[],
+  schemaFields: ContributionField[]
+): Record<string, string>[] {
+  if (rows.length === 0 || schemaFields.length === 0) return rows
+
+  const csvHeaders = Object.keys(rows[0])
+  const mapping: Record<string, string> = {} // csvHeader → schemaName
+
+  for (const header of csvHeaders) {
+    // Exact match first
+    const exact = schemaFields.find((f) => f.name === header)
+    if (exact) {
+      mapping[header] = exact.name
+      continue
+    }
+    // Normalized match (ignore underscores + case)
+    const norm = normalizeColName(header)
+    const fuzzy = schemaFields.find((f) => normalizeColName(f.name) === norm)
+    if (fuzzy) {
+      mapping[header] = fuzzy.name
+    } else {
+      // No match — pass through as-is, let backend validate
+      mapping[header] = header
+    }
+  }
+
+  // If all mappings are identity, skip remapping
+  const needsRemap = csvHeaders.some((h) => mapping[h] !== h)
+  if (!needsRemap) return rows
+
+  return rows.map((row) => {
+    const out: Record<string, string> = {}
+    for (const [key, val] of Object.entries(row)) {
+      out[mapping[key] ?? key] = val
+    }
+    return out
   })
 }
 
@@ -122,6 +171,9 @@ export default function ContributePage() {
   const [imageChecking, setImageChecking] = useState<Record<string, boolean>>({})
   const [submitting, setSubmitting] = useState(false)
   const [submitSuccess, setSubmitSuccess] = useState(false)
+  // Single-entry URL scan state
+  const [fieldUrlScan, setFieldUrlScan] = useState<Record<string, ScanUrlResult>>({})
+  const [fieldUrlScanning, setFieldUrlScanning] = useState<Record<string, boolean>>({})
 
   // Batch state
   const [csvRows, setCsvRows] = useState<Record<string, string>[]>([])
@@ -130,6 +182,8 @@ export default function ContributePage() {
   const [csvError, setCsvError] = useState<string | null>(null)
   const [batchSubmitting, setBatchSubmitting] = useState(false)
   const [batchResult, setBatchResult] = useState<number | null>(null)
+  const [urlScanResults, setUrlScanResults] = useState<Record<string, ScanUrlResult>>({})
+  const [urlScanning, setUrlScanning] = useState(false)
 
   // Helper: load schema for a given table and set activeFields + formData
   const loadTableSchema = useCallback(
@@ -140,10 +194,9 @@ export default function ContributePage() {
         const dataCols = schema.columns.filter(
           (c) => c.name !== "id" && c.name !== "created_at"
         )
-        const fields: ContributionField[] = dataCols.map((col, colIdx) => {
-          const specMatch =
-            specFields.find((s) => s.name === col.name) ??
-            specFields[colIdx]
+        const fields: ContributionField[] = dataCols.map((col) => {
+          // Only match spec fields by exact name — never fall back to positional index
+          const specMatch = specFields.find((s) => s.name === col.name)
           let fieldType: ContributionField["type"] = "STRING"
           if (specMatch) {
             fieldType = specMatch.type
@@ -169,7 +222,9 @@ export default function ContributePage() {
           initial[f.name] = f.type === "BOOLEAN" ? false : ""
         }
         setFormData(initial)
-      } catch {
+      } catch (err) {
+        console.warn(`Failed to load schema for ${pk}/${table}, falling back to contribution spec:`, err)
+        setError(`Could not load table schema for "${table}". Using program defaults — fields may be outdated.`)
         setActiveFields(specFields)
         const initial: Record<string, string | boolean> = {}
         for (const f of specFields) {
@@ -190,6 +245,10 @@ export default function ContributePage() {
       setBatchImageResults({})
       setBatchResult(null)
       setCsvError(null)
+      setUrlScanResults({})
+      setUrlScanning(false)
+      setFieldUrlScan({})
+      setFieldUrlScanning({})
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     []
@@ -317,6 +376,8 @@ export default function ContributePage() {
         setImageCnn({})
         setImageQuality({})
         setImageChecking({})
+        setFieldUrlScan({})
+        setFieldUrlScanning({})
         setTimeout(() => setSubmitSuccess(false), 3000)
       } catch (err) {
         setError(err instanceof Error ? err.message : "Submission failed")
@@ -339,7 +400,7 @@ export default function ContributePage() {
       setBatchResult(null)
 
       const allFiles = Array.from(fileList)
-      const csvFile = allFiles.find((f) => f.name.endsWith(".csv"))
+      const csvFile = allFiles.find((f) => f.name.endsWith(".csv") || f.name.endsWith(".tsv"))
       const images = allFiles.filter((f) => isImageFile(f))
 
       // Store images for later upload
@@ -348,26 +409,30 @@ export default function ContributePage() {
       }
 
       if (csvFile) {
-        // CSV + possibly images mode
+        // CSV/TSV + possibly images mode
+        const delimiter = csvFile.name.endsWith(".tsv") ? "\t" : ","
         const reader = new FileReader()
         reader.onload = (e) => {
           const text = e.target?.result as string
-          const rows = parseCsv(text)
+          let rows = parseDelimited(text, delimiter)
           if (rows.length === 0) {
-            setCsvError("CSV file is empty or has no data rows")
+            setCsvError("File is empty or has no data rows")
             return
           }
+
+          // Remap column names to match DB schema (e.g. taxonid → taxon_id)
+          rows = remapColumns(rows, activeFields)
 
           if (activeFields.length > 0) {
             const imageFieldNames = new Set(
               activeFields.filter((f) => f.type === "IMAGE").map((f) => f.name)
             )
-            const nonImageFields = activeFields.filter((f) => f.type !== "IMAGE")
+            const requiredNonImageFields = activeFields.filter((f) => f.type !== "IMAGE" && f.required)
             const actual = new Set(Object.keys(rows[0]))
-            // Only require non-IMAGE columns; IMAGE columns in CSV are optional (contain filenames)
-            const missing = nonImageFields.filter((f) => !actual.has(f.name)).map((f) => f.name)
+            // Only require fields explicitly marked as required; other columns are optional
+            const missing = requiredNonImageFields.filter((f) => !actual.has(f.name)).map((f) => f.name)
             if (missing.length > 0) {
-              setCsvError(`Missing columns: ${missing.join(", ")}`)
+              setCsvError(`Missing required columns: ${missing.join(", ")}`)
               return
             }
 
@@ -454,15 +519,16 @@ export default function ContributePage() {
 
       const coerced = csvRows.map((row) => {
         const out: Record<string, unknown> = {}
-        for (const field of activeFields) {
-          if (row[field.name] === undefined) continue
-
-          if (field.type === "IMAGE") {
+        for (const [col, val] of Object.entries(row)) {
+          const field = activeFields.find((f) => f.name === col)
+          if (field?.type === "IMAGE") {
             // Replace filename with uploaded URL
-            const filename = row[field.name]
-            out[field.name] = filenameToUrl[filename] ?? filename
+            out[col] = filenameToUrl[val] ?? val
+          } else if (field) {
+            out[col] = coerceValue(val, field.type)
           } else {
-            out[field.name] = coerceValue(row[field.name], field.type)
+            // Column not in schema — pass through as-is, let backend validate
+            out[col] = val
           }
         }
         return out
@@ -518,6 +584,45 @@ export default function ContributePage() {
   }
 
   const hasImageFields = activeFields.some((f) => f.type === "IMAGE")
+
+  // Detect columns containing URLs in parsed rows
+  const urlColumns = csvRows.length > 0
+    ? Object.keys(csvRows[0]).filter((col) =>
+        csvRows.some((row) => row[col]?.startsWith("http"))
+      )
+    : []
+
+  const handleScanUrls = async () => {
+    if (urlColumns.length === 0 || csvRows.length === 0) return
+    setUrlScanning(true)
+    setUrlScanResults({})
+    try {
+      const urls = csvRows.flatMap((row) =>
+        urlColumns.map((col) => row[col]).filter((v) => v?.startsWith("http"))
+      )
+      const uniqueUrls = [...new Set(urls)]
+      const res = await scanImageUrls(uniqueUrls, projectKey, tableName ?? undefined)
+      setUrlScanResults(res.results)
+
+      // Remove rows where any URL failed quality checks
+      const filtered = csvRows.filter((row) => {
+        for (const col of urlColumns) {
+          const url = row[col]
+          if (!url?.startsWith("http")) continue
+          const result = res.results[url]
+          if (result?.error || (result && !result.quality.passed)) {
+            return false
+          }
+        }
+        return true
+      })
+      setCsvRows(filtered)
+    } catch (err) {
+      setCsvError(err instanceof Error ? err.message : "URL scan failed")
+    } finally {
+      setUrlScanning(false)
+    }
+  }
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-10 lg:px-8">
@@ -705,9 +810,67 @@ export default function ContributePage() {
                     )}
                   </div>
                 ) : (
-                  fieldInput(field, formData[field.name] ?? "", (val) =>
-                    setFormData((prev) => ({ ...prev, [field.name]: val }))
-                  )
+                  <div className="space-y-2">
+                    {fieldInput(field, formData[field.name] ?? "", (val) =>
+                      setFormData((prev) => ({ ...prev, [field.name]: val }))
+                    )}
+                    {/* Scan button for URL values */}
+                    {typeof formData[field.name] === "string" && (formData[field.name] as string).startsWith("http") && (
+                      <>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={fieldUrlScanning[field.name]}
+                          onClick={async () => {
+                            const url = formData[field.name] as string
+                            setFieldUrlScanning((prev) => ({ ...prev, [field.name]: true }))
+                            try {
+                              const res = await scanImageUrls([url], projectKey, tableName ?? undefined)
+                              const result = res.results[url]
+                              if (result) {
+                                setFieldUrlScan((prev) => ({ ...prev, [field.name]: result }))
+                              }
+                            } catch {
+                              // scan failed silently
+                            } finally {
+                              setFieldUrlScanning((prev) => ({ ...prev, [field.name]: false }))
+                            }
+                          }}
+                        >
+                          {fieldUrlScanning[field.name] ? (
+                            <><Loader2 className="mr-2 h-3 w-3 animate-spin" />Scanning...</>
+                          ) : (
+                            <><ImageIcon className="mr-2 h-3 w-3" />Scan Image URL</>
+                          )}
+                        </Button>
+                        {fieldUrlScan[field.name] && !fieldUrlScan[field.name].error && (
+                          <div className="flex flex-wrap gap-2">
+                            {fieldUrlScan[field.name].quality.warnings.length > 0 ? (
+                              <div className="flex items-center gap-1.5 rounded-md bg-amber-500/10 px-3 py-1.5 text-sm text-amber-600">
+                                <AlertTriangle className="h-4 w-4 shrink-0" />
+                                {fieldUrlScan[field.name].quality.warnings[0].message}
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1.5 rounded-md bg-primary/10 px-3 py-1.5 text-sm text-primary">
+                                <CheckCircle2 className="h-4 w-4 shrink-0" />
+                                Image quality: Good
+                              </div>
+                            )}
+                            {fieldUrlScan[field.name].cnn && (
+                              <div className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm ${fieldUrlScan[field.name].cnn!.matches ? "bg-primary/10 text-primary" : "bg-amber-500/10 text-amber-600"}`}>
+                                {fieldUrlScan[field.name].cnn!.matches ? <CheckCircle2 className="h-4 w-4 shrink-0" /> : <AlertTriangle className="h-4 w-4 shrink-0" />}
+                                {fieldUrlScan[field.name].cnn!.label} ({Math.round(fieldUrlScan[field.name].cnn!.confidence * 100)}%)
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {fieldUrlScan[field.name]?.error && (
+                          <div className="text-sm text-destructive">{fieldUrlScan[field.name].error}</div>
+                        )}
+                      </>
+                    )}
+                  </div>
                 )}
               </div>
             ))}
@@ -753,7 +916,7 @@ export default function ContributePage() {
             onClick={() => {
               const input = document.createElement("input")
               input.type = "file"
-              input.accept = hasImageFields ? ".csv,image/jpeg,image/png,image/webp" : ".csv"
+              input.accept = hasImageFields ? ".csv,.tsv,image/jpeg,image/png,image/webp" : ".csv,.tsv"
               input.multiple = true
               input.onchange = () => {
                 if (input.files && input.files.length > 0) handleBatchFiles(input.files)
@@ -772,12 +935,12 @@ export default function ContributePage() {
             )}
             <p className="text-sm font-medium text-foreground">
               {hasImageFields
-                ? "Drop CSV + images, images only, or a CSV here"
-                : "Drop a CSV file here or click to browse"}
+                ? "Drop CSV/TSV + images, images only, or a CSV/TSV here"
+                : "Drop a CSV/TSV file here or click to browse"}
             </p>
             <p className="text-xs text-muted-foreground">
               {hasImageFields
-                ? "CSV + images: match by filename. Images only: auto-fills name from filename."
+                ? "CSV/TSV + images: match by filename. Images only: auto-fills name from filename."
                 : `Expected headers: ${activeFields.map((f) => f.name).join(", ")}`}
             </p>
           </div>
@@ -871,11 +1034,43 @@ export default function ContributePage() {
                       <TableRow key={i}>
                         {Object.entries(row).map(([col, val]) => {
                           const isImg = activeFields.find((f) => f.name === col)?.type === "IMAGE"
+                          const isUrl = val?.startsWith("http")
+                          const scanResult = isUrl ? urlScanResults[val] : null
                           return (
                             <TableCell key={col}>
-                              {isImg
-                                ? <span className="flex items-center gap-1 text-xs"><ImageIcon className="h-3 w-3" />{val}</span>
-                                : val}
+                              {isImg ? (
+                                <span className="flex items-center gap-1 text-xs"><ImageIcon className="h-3 w-3" />{val}</span>
+                              ) : isUrl ? (
+                                <div className="space-y-1">
+                                  <a href={val} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 hover:underline truncate block max-w-[200px]" title={val}>
+                                    {val.split("/").pop() || val}
+                                  </a>
+                                  {scanResult && !scanResult.error && (
+                                    <div className="flex flex-wrap gap-1">
+                                      {scanResult.quality.warnings.length > 0 ? (
+                                        <span className="inline-flex items-center gap-0.5 rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-600">
+                                          <AlertTriangle className="h-3 w-3" />
+                                          {scanResult.quality.warnings[0].message}
+                                        </span>
+                                      ) : (
+                                        <span className="inline-flex items-center gap-0.5 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
+                                          <CheckCircle2 className="h-3 w-3" />
+                                          Quality: Good
+                                        </span>
+                                      )}
+                                      {scanResult.cnn && (
+                                        <span className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] ${scanResult.cnn.matches ? "bg-primary/10 text-primary" : "bg-amber-500/10 text-amber-600"}`}>
+                                          {scanResult.cnn.matches ? <CheckCircle2 className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
+                                          {scanResult.cnn.label} ({Math.round(scanResult.cnn.confidence * 100)}%)
+                                        </span>
+                                      )}
+                                    </div>
+                                  )}
+                                  {scanResult?.error && (
+                                    <span className="text-[10px] text-destructive">{scanResult.error}</span>
+                                  )}
+                                </div>
+                              ) : val}
                             </TableCell>
                           )
                         })}
@@ -894,6 +1089,31 @@ export default function ContributePage() {
                   </TableBody>
                 </Table>
               </div>
+
+              {urlColumns.length > 0 && (
+                <Button
+                  variant="outline"
+                  onClick={handleScanUrls}
+                  disabled={urlScanning}
+                >
+                  {urlScanning ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Scanning image URLs...
+                    </>
+                  ) : Object.keys(urlScanResults).length > 0 ? (
+                    <>
+                      <CheckCircle2 className="mr-2 h-4 w-4" />
+                      Re-scan Image URLs
+                    </>
+                  ) : (
+                    <>
+                      <ImageIcon className="mr-2 h-4 w-4" />
+                      Scan Image URLs
+                    </>
+                  )}
+                </Button>
+              )}
 
               <Button
                 onClick={handleBatchSubmit}

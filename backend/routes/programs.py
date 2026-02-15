@@ -73,6 +73,7 @@ async def create_program(data: ProgramCreate, db: AsyncSession = Depends(get_db)
         contribution_spec=contribution_spec,
         project_name=data.project_name,
         table_name=data.table_name,
+        cnn_filter=data.cnn_filter,
     )
     db.add(program)
     await db.commit()

@@ -43,6 +43,7 @@ function mapProgram(p: Record<string, unknown>): Program {
     contributionSpec: p.contribution_spec as Program["contributionSpec"],
     projectName: p.project_name as string | undefined,
     tableName: p.table_name as string | undefined,
+    cnnFilter: p.cnn_filter as string | undefined,
   }
 }
 
@@ -65,6 +66,7 @@ export async function createProgram(data: ProgramCreate): Promise<Program> {
       table_name: data.tableName,
       accepted_files: data.acceptedFiles ?? [],
       fields: data.fields ?? [],
+      cnn_filter: data.cnnFilter ?? null,
     }),
   })
   return mapProgram(res)

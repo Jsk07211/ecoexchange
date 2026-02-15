@@ -35,9 +35,16 @@ class QualityScanResult(BaseModel):
     )
 
 
+class CnnResult(BaseModel):
+    label: str = Field(description="Detected class label from CNN")
+    confidence: float = Field(description="Confidence score 0.0-1.0")
+    matches: bool = Field(description="Whether the detection matches the expected category")
+    expected_category: str = Field(description="The category the program expects")
+    message: str = Field(description="Human-readable CNN result message")
+
+
 class UploadFilterResult(BaseModel):
-    """Result of AI filtering for a single file.
-    For now passes everything through — swap in real AI logic later."""
+    """Result of AI filtering for a single file."""
 
     filename: str
     file_type: Literal["image", "text", "video", "unknown"]
@@ -49,6 +56,7 @@ class UploadFilterResult(BaseModel):
     quality: QualityScanResult = Field(default_factory=QualityScanResult)
     ai_tags: list[str] = []
     ai_confidence: Optional[float] = None
+    cnn: Optional[CnnResult] = None
 
 
 class UploadResponse(BaseModel):

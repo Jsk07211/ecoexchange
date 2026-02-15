@@ -17,6 +17,7 @@ class Program(BaseModel):
     contribution_spec: Optional[dict] = None
     project_name: Optional[str] = None
     table_name: Optional[str] = None
+    cnn_filter: Optional[str] = None
 
 
 class ProgramCreate(BaseModel):
@@ -30,3 +31,4 @@ class ProgramCreate(BaseModel):
     table_name: Optional[str] = None
     accepted_files: list[str] = []
     fields: list[dict] = []
+    cnn_filter: Optional[str] = None

@@ -25,6 +25,7 @@ export interface Program {
   contributionSpec?: ContributionSpec
   projectName?: string
   tableName?: string
+  cnnFilter?: string
 }
 
 export type FieldType = "INT" | "STRING" | "FLOAT" | "BOOLEAN" | "DATE" | "TEXT" | "IMAGE"
@@ -58,6 +59,7 @@ export interface ProgramCreate {
   tableName?: string
   acceptedFiles?: string[]
   fields?: FieldDefinition[]
+  cnnFilter?: string
 }
 
 export interface FormFieldConfig {

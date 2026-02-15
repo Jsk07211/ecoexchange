@@ -6,6 +6,7 @@ import Link from "next/link"
 import {
   Loader2,
   AlertCircle,
+  AlertTriangle,
   Upload,
   CheckCircle2,
   FileSpreadsheet,
@@ -29,7 +30,7 @@ import {
 import { getProgram } from "@/lib/api/programs"
 import { getProjectTables } from "@/lib/api/tables"
 import { insertRow, insertRowsBatch } from "@/lib/api/tables"
-import { uploadFiles } from "@/lib/api/uploads"
+import { uploadFiles, type CnnResult } from "@/lib/api/uploads"
 import type { Program, ContributionField } from "@/lib/types"
 
 function fieldInput(
@@ -114,6 +115,7 @@ export default function ContributePage() {
   // Single entry state
   const [formData, setFormData] = useState<Record<string, string | boolean>>({})
   const [formImages, setFormImages] = useState<Record<string, { file: File; preview: string }>>({})
+  const [imageCnn, setImageCnn] = useState<Record<string, CnnResult>>({})
   const [submitting, setSubmitting] = useState(false)
   const [submitSuccess, setSubmitSuccess] = useState(false)
 
@@ -186,6 +188,12 @@ export default function ContributePage() {
         // Upload any image fields and add their URLs to the row
         const imageFields = program.contributionSpec.fields.filter((f) => f.type === "IMAGE")
         for (const field of imageFields) {
+          // Check if we already uploaded this image (from CNN eager check)
+          const existingUrl = formData[`__url_${field.name}`]
+          if (existingUrl) {
+            data[field.name] = existingUrl
+            continue
+          }
           const img = formImages[field.name]
           if (img) {
             const uploadRes = await uploadFiles([img.file], projectKey)
@@ -210,6 +218,7 @@ export default function ContributePage() {
           URL.revokeObjectURL(img.preview)
         }
         setFormImages({})
+        setImageCnn({})
         setTimeout(() => setSubmitSuccess(false), 3000)
       } catch (err) {
         setError(err instanceof Error ? err.message : "Submission failed")
@@ -445,29 +454,58 @@ export default function ContributePage() {
                   <div className="space-y-1.5">
                     <Label className="text-sm font-medium">
                       {field.description ?? field.name}
+                      {program.cnnFilter && (
+                        <span className="ml-2 text-xs font-normal text-muted-foreground">
+                          CNN: {program.cnnFilter}
+                        </span>
+                      )}
                     </Label>
                     {formImages[field.name] ? (
-                      <div className="relative inline-block">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={formImages[field.name].preview}
-                          alt="Preview"
-                          className="h-32 w-32 rounded-lg object-cover border border-border"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            URL.revokeObjectURL(formImages[field.name].preview)
-                            setFormImages((prev) => {
-                              const next = { ...prev }
-                              delete next[field.name]
-                              return next
-                            })
-                          }}
-                          className="absolute -right-2 -top-2 rounded-full bg-destructive p-1 text-destructive-foreground"
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
+                      <div className="space-y-2">
+                        <div className="relative inline-block">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={formImages[field.name].preview}
+                            alt="Preview"
+                            className="h-32 w-32 rounded-lg object-cover border border-border"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              URL.revokeObjectURL(formImages[field.name].preview)
+                              setFormImages((prev) => {
+                                const next = { ...prev }
+                                delete next[field.name]
+                                return next
+                              })
+                              setImageCnn((prev) => {
+                                const next = { ...prev }
+                                delete next[field.name]
+                                return next
+                              })
+                            }}
+                            className="absolute -right-2 -top-2 rounded-full bg-destructive p-1 text-destructive-foreground"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
+                        {/* CNN result badge */}
+                        {imageCnn[field.name] && (
+                          <div
+                            className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm ${
+                              imageCnn[field.name].matches
+                                ? "bg-primary/10 text-primary"
+                                : "bg-amber-500/10 text-amber-600"
+                            }`}
+                          >
+                            {imageCnn[field.name].matches ? (
+                              <CheckCircle2 className="h-4 w-4 shrink-0" />
+                            ) : (
+                              <AlertTriangle className="h-4 w-4 shrink-0" />
+                            )}
+                            {imageCnn[field.name].message}
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <div
@@ -476,13 +514,29 @@ export default function ContributePage() {
                           const input = document.createElement("input")
                           input.type = "file"
                           input.accept = "image/jpeg,image/png,image/webp"
-                          input.onchange = () => {
+                          input.onchange = async () => {
                             const file = input.files?.[0]
                             if (file) {
                               setFormImages((prev) => ({
                                 ...prev,
                                 [field.name]: { file, preview: URL.createObjectURL(file) },
                               }))
+                              // Eagerly upload to get CNN results
+                              if (program.cnnFilter) {
+                                try {
+                                  const res = await uploadFiles([file], projectKey)
+                                  const r = res.results[0]
+                                  if (r?.cnn) {
+                                    setImageCnn((prev) => ({ ...prev, [field.name]: r.cnn! }))
+                                  }
+                                  // Store the URL so we don't re-upload on submit
+                                  if (r?.url) {
+                                    setFormData((prev) => ({ ...prev, [`__url_${field.name}`]: r.url! }))
+                                  }
+                                } catch {
+                                  // CNN check failed, still allow the image
+                                }
+                              }
                             }
                           }
                           input.click()

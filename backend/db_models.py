@@ -22,6 +22,7 @@ class ProgramDB(Base):
     contribution_spec: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     project_name: Mapped[str | None] = mapped_column(String, nullable=True)
     table_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    cnn_filter: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class DatasetDB(Base):

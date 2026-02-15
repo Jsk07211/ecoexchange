@@ -12,6 +12,14 @@ export interface QualityScanResult {
   warnings: QualityWarning[]
 }
 
+export interface CnnResult {
+  label: string
+  confidence: number
+  matches: boolean
+  expectedCategory: string
+  message: string
+}
+
 export interface UploadFilterResult {
   filename: string
   fileType: "image" | "text" | "video" | "unknown"
@@ -23,6 +31,7 @@ export interface UploadFilterResult {
   quality: QualityScanResult
   aiTags: string[]
   aiConfidence: number | null
+  cnn: CnnResult | null
 }
 
 export interface UploadResponse {
@@ -71,6 +80,13 @@ export async function uploadFiles(
       },
       aiTags: r.ai_tags,
       aiConfidence: r.ai_confidence,
+      cnn: r.cnn ? {
+        label: (r.cnn as Record<string, unknown>).label as string,
+        confidence: (r.cnn as Record<string, unknown>).confidence as number,
+        matches: (r.cnn as Record<string, unknown>).matches as boolean,
+        expectedCategory: (r.cnn as Record<string, unknown>).expected_category as string,
+        message: (r.cnn as Record<string, unknown>).message as string,
+      } : null,
     })),
   }
 }

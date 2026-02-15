@@ -32,6 +32,11 @@ async def lifespan(app: FastAPI):
                 "ALTER TABLE programs ADD COLUMN IF NOT EXISTS table_name VARCHAR"
             )
         )
+        await conn.execute(
+            sqlalchemy.text(
+                "ALTER TABLE programs ADD COLUMN IF NOT EXISTS cnn_filter VARCHAR"
+            )
+        )
     async with async_session() as session:
         await seed(session)
     yield

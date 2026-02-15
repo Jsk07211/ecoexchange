@@ -66,6 +66,7 @@ export function CreateForm() {
   const [category, setCategory] = useState("Biodiversity")
   const [description, setDescription] = useState("")
   const [location, setLocation] = useState("")
+  const [cnnFilter, setCnnFilter] = useState("")
   const [tables, setTables] = useState<TableDef[]>([
     { name: "", fields: [{ name: "", type: "STRING" }] },
   ])
@@ -189,6 +190,7 @@ export function CreateForm() {
           tableName: primaryTable,
           acceptedFiles: acceptImages ? ["image", "csv"] : ["csv"],
           fields: allFields,
+          cnnFilter: cnnFilter || undefined,
         }),
       ])
       setTableResponses(responses)
@@ -248,6 +250,7 @@ export function CreateForm() {
               setCategory("Biodiversity")
               setDescription("")
               setLocation("")
+              setCnnFilter("")
               setTables([{ name: "", fields: [{ name: "", type: "STRING" }] }])
               setTableResponses([])
               setError("")
@@ -399,6 +402,25 @@ export function CreateForm() {
                 onChange={(e) => setDescription(e.target.value)}
                 rows={3}
               />
+            </div>
+
+            {/* CNN Filter */}
+            <div className="space-y-2">
+              <Label htmlFor="cnn-filter">CNN Image Filter</Label>
+              <Select value={cnnFilter || "none"} onValueChange={(v) => setCnnFilter(v === "none" ? "" : v)}>
+                <SelectTrigger id="cnn-filter">
+                  <SelectValue placeholder="None (disabled)" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">None (disabled)</SelectItem>
+                  <SelectItem value="bird">Birds only</SelectItem>
+                  <SelectItem value="animal">Any animal</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Uses MobileNetV2 CNN to verify uploaded images match the expected category.
+                Mismatches show as warnings but don{`'`}t block uploads.
+              </p>
             </div>
 
             {/* Tables */}

@@ -6,7 +6,7 @@ class FileInfo(BaseModel):
     filename: str
     content_type: str
     size: int
-    file_type: Literal["pdf", "image", "csv", "unknown"]
+    file_type: Literal["image", "text", "video", "unknown"]
 
 
 class UploadFilterResult(BaseModel):
@@ -14,7 +14,7 @@ class UploadFilterResult(BaseModel):
     For now passes everything through — swap in real AI logic later."""
 
     filename: str
-    file_type: Literal["pdf", "image", "csv", "unknown"]
+    file_type: Literal["image", "text", "video", "unknown"]
     size: int
     accepted: bool
     reason: Optional[str] = None
@@ -27,4 +27,5 @@ class UploadResponse(BaseModel):
     total_files: int
     accepted: int
     rejected: int
+    program_id: str
     results: list[UploadFilterResult]

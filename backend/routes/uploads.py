@@ -1,16 +1,20 @@
-from fastapi import APIRouter, UploadFile, File
+from fastapi import APIRouter, UploadFile, File, Form
 
 from backend.models.upload import UploadFilterResult, UploadResponse
 
 router = APIRouter(prefix="/api/uploads", tags=["uploads"])
 
 ALLOWED_CONTENT_TYPES: dict[str, str] = {
-    "application/pdf": "pdf",
+    "application/pdf": "text",
     "image/jpeg": "image",
     "image/png": "image",
     "image/webp": "image",
-    "text/csv": "csv",
-    "application/vnd.ms-excel": "csv",
+    "text/csv": "text",
+    "text/plain": "text",
+    "application/vnd.ms-excel": "text",
+    "video/mp4": "video",
+    "video/quicktime": "video",
+    "video/webm": "video",
 }
 
 
@@ -19,11 +23,13 @@ def _detect_file_type(content_type: str, filename: str) -> str:
         return ALLOWED_CONTENT_TYPES[content_type]
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     if ext == "pdf":
-        return "pdf"
+        return "text"
     if ext in ("jpg", "jpeg", "png", "webp"):
         return "image"
-    if ext == "csv":
-        return "csv"
+    if ext in ("csv", "txt"):
+        return "text"
+    if ext in ("mp4", "mov", "webm"):
+        return "video"
     return "unknown"
 
 
@@ -41,7 +47,10 @@ async def _ai_filter(file: UploadFile, file_type: str, contents: bytes) -> Uploa
 
 
 @router.post("", response_model=UploadResponse)
-async def upload_files(files: list[UploadFile] = File(...)):
+async def upload_files(
+    files: list[UploadFile] = File(...),
+    program_id: str = Form(...),
+):
     results: list[UploadFilterResult] = []
 
     for f in files:
@@ -55,5 +64,6 @@ async def upload_files(files: list[UploadFile] = File(...)):
         total_files=len(results),
         accepted=accepted,
         rejected=len(results) - accepted,
+        program_id=program_id,
         results=results,
     )

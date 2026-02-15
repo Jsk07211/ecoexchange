@@ -2,7 +2,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
 
 export interface UploadFilterResult {
   filename: string
-  fileType: "pdf" | "image" | "csv" | "unknown"
+  fileType: "image" | "text" | "video" | "unknown"
   size: number
   accepted: boolean
   reason: string | null
@@ -14,14 +14,19 @@ export interface UploadResponse {
   totalFiles: number
   accepted: number
   rejected: number
+  programId: string
   results: UploadFilterResult[]
 }
 
-export async function uploadFiles(files: File[]): Promise<UploadResponse> {
+export async function uploadFiles(
+  files: File[],
+  programId: string
+): Promise<UploadResponse> {
   const formData = new FormData()
   for (const file of files) {
     formData.append("files", file)
   }
+  formData.append("program_id", programId)
 
   const res = await fetch(`${API_BASE}/api/uploads`, {
     method: "POST",
@@ -34,6 +39,7 @@ export async function uploadFiles(files: File[]): Promise<UploadResponse> {
     totalFiles: data.total_files,
     accepted: data.accepted,
     rejected: data.rejected,
+    programId: data.program_id,
     results: data.results.map((r: Record<string, unknown>) => ({
       filename: r.filename,
       fileType: r.file_type,

@@ -139,9 +139,8 @@ export default function ContributePage() {
   const [batchResult, setBatchResult] = useState<number | null>(null)
 
   // Image upload state: "select" → "validated" → "confirmed"
-  type ImageStep = "select" | "validating" | "validated" | "confirming" | "confirmed"
   const [imagePreviews, setImagePreviews] = useState<ImagePreview[]>([])
-  const [imageStep, setImageStep] = useState<ImageStep>("select")
+  const [imageStep, setImageStep] = useState<"select" | "validating" | "validated" | "confirming" | "confirmed">("select")
   const [imageError, setImageError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -161,10 +160,11 @@ export default function ContributePage() {
           setFormData(initial)
         }
 
-        // Get the first table for this project
+        // Get the sightings table for this project (skip image tables)
         try {
           const res = await getProjectTables(id)
-          if (res.tables.length > 0) setTableName(res.tables[0])
+          const dataTable = res.tables.find((t) => t === "sightings") ?? res.tables.find((t) => !t.includes("image")) ?? res.tables[0]
+          if (dataTable) setTableName(dataTable)
         } catch {
           // No tables yet
         }
@@ -281,7 +281,7 @@ export default function ContributePage() {
     )
     if (accepted.length === 0) return
     setImageError(null)
-    setImageUploadDone(false)
+    setImageStep("select")
     const newPreviews: ImagePreview[] = accepted.map((file) => ({
       file,
       localUrl: URL.createObjectURL(file),

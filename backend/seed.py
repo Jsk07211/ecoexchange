@@ -112,5 +112,9 @@ async def _seed_bird_images_table() -> None:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Backfill column if table existed before quality_score was added
+        await project_conn.execute(
+            "ALTER TABLE bird_images ADD COLUMN IF NOT EXISTS quality_score DOUBLE PRECISION DEFAULT 100.0"
+        )
     finally:
         await project_conn.close()

@@ -1,5 +1,6 @@
 import os
 import re
+from datetime import date, datetime
 
 import asyncpg
 from fastapi import APIRouter, HTTPException
@@ -24,12 +25,28 @@ def _parse_conn_params() -> dict:
     return {"dsn": raw}
 
 
+def _project_dsn(project: str) -> str:
+    base_dsn = _parse_conn_params()["dsn"]
+    return "/".join(base_dsn.rsplit("/", 1)[:-1]) + f"/{project}"
+
+
 def _validate_identifier(name: str, label: str) -> None:
     if not _IDENTIFIER_RE.match(name):
         raise HTTPException(
             status_code=400,
             detail=f"Invalid {label}: '{name}'. Use only letters, digits, and underscores.",
         )
+
+
+def _serialize_row(record: asyncpg.Record) -> dict:
+    """Convert an asyncpg Record to a JSON-safe dict."""
+    row: dict = {}
+    for key, value in record.items():
+        if isinstance(value, (datetime, date)):
+            row[key] = value.isoformat()
+        else:
+            row[key] = value
+    return row
 
 
 @router.post("/tables")
@@ -57,12 +74,7 @@ async def create_dynamic_table(req: DynamicTableRequest):
         await sys_conn.close()
 
     # --- 2. Connect to the new database and create the table ----------------
-    # Build a DSN pointing at the newly created database
-    base_dsn = conn_params["dsn"]
-    # Replace the database portion in the DSN
-    project_dsn = "/".join(base_dsn.rsplit("/", 1)[:-1]) + f"/{db_name}"
-
-    project_conn = await asyncpg.connect(dsn=project_dsn)
+    project_conn = await asyncpg.connect(dsn=_project_dsn(db_name))
     try:
         column_defs = ["id SERIAL PRIMARY KEY"]
         for field in req.fields:
@@ -87,4 +99,116 @@ async def create_dynamic_table(req: DynamicTableRequest):
         "database": db_name,
         "table": table_name,
         "columns": columns,
+    }
+
+
+@router.get("/tables/{project}")
+async def list_project_tables(project: str):
+    """List all public tables in a project database."""
+    project = project.lower()
+    _validate_identifier(project, "project_name")
+
+    try:
+        conn = await asyncpg.connect(dsn=_project_dsn(project))
+    except asyncpg.InvalidCatalogNameError:
+        raise HTTPException(404, f"Project database '{project}' not found")
+
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+            ORDER BY table_name
+            """
+        )
+        tables = [r["table_name"] for r in rows]
+    finally:
+        await conn.close()
+
+    return {"project": project, "tables": tables}
+
+
+@router.get("/tables/{project}/{table}/schema")
+async def get_table_schema(project: str, table: str):
+    """Return column names and Postgres types for a dynamic table."""
+    project = project.lower()
+    table = table.lower()
+    _validate_identifier(project, "project_name")
+    _validate_identifier(table, "table_name")
+
+    try:
+        conn = await asyncpg.connect(dsn=_project_dsn(project))
+    except asyncpg.InvalidCatalogNameError:
+        raise HTTPException(404, f"Project database '{project}' not found")
+
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT column_name, data_type, is_nullable
+            FROM information_schema.columns
+            WHERE table_name = $1
+            ORDER BY ordinal_position
+            """,
+            table,
+        )
+        if not rows:
+            raise HTTPException(404, f"Table '{table}' not found in '{project}'")
+
+        columns = [
+            {
+                "name": r["column_name"],
+                "type": r["data_type"],
+                "nullable": r["is_nullable"] == "YES",
+            }
+            for r in rows
+        ]
+    finally:
+        await conn.close()
+
+    return {"project": project, "table": table, "columns": columns}
+
+
+@router.get("/tables/{project}/{table}/rows")
+async def get_table_rows(project: str, table: str, limit: int = 100, offset: int = 0):
+    """Return rows from a dynamic table."""
+    project = project.lower()
+    table = table.lower()
+    _validate_identifier(project, "project_name")
+    _validate_identifier(table, "table_name")
+
+    try:
+        conn = await asyncpg.connect(dsn=_project_dsn(project))
+    except asyncpg.InvalidCatalogNameError:
+        raise HTTPException(404, f"Project database '{project}' not found")
+
+    try:
+        # Verify table exists
+        exists = await conn.fetchval(
+            """
+            SELECT 1 FROM information_schema.tables
+            WHERE table_name = $1 AND table_schema = 'public'
+            """,
+            table,
+        )
+        if not exists:
+            raise HTTPException(404, f"Table '{table}' not found in '{project}'")
+
+        total = await conn.fetchval(f'SELECT COUNT(*) FROM "{table}"')
+        records = await conn.fetch(
+            f'SELECT * FROM "{table}" ORDER BY id LIMIT $1 OFFSET $2',
+            limit,
+            offset,
+        )
+        rows = [_serialize_row(r) for r in records]
+    finally:
+        await conn.close()
+
+    return {
+        "project": project,
+        "table": table,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "rows": rows,
     }

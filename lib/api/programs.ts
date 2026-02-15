@@ -1,5 +1,5 @@
 import { apiFetch } from "./client"
-import type { Program } from "../types"
+import type { Program, ProgramCreate } from "../types"
 
 interface ProgramParams {
   category?: string
@@ -41,5 +41,31 @@ function mapProgram(p: Record<string, unknown>): Program {
     tags: p.tags as string[],
     deadline: p.deadline as string | undefined,
     contributionSpec: p.contribution_spec as Program["contributionSpec"],
+    projectName: p.project_name as string | undefined,
+    tableName: p.table_name as string | undefined,
   }
+}
+
+export async function deleteProgram(id: string): Promise<void> {
+  await apiFetch(`/api/programs/${id}`, { method: "DELETE" })
+}
+
+export async function createProgram(data: ProgramCreate): Promise<Program> {
+  const res = await apiFetch<Record<string, unknown>>("/api/programs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: data.title,
+      organization: data.organization ?? "",
+      category: data.category ?? "Biodiversity",
+      description: data.description ?? "",
+      location: data.location ?? "",
+      tags: data.tags ?? [],
+      project_name: data.projectName,
+      table_name: data.tableName,
+      accepted_files: data.acceptedFiles ?? [],
+      fields: data.fields ?? [],
+    }),
+  })
+  return mapProgram(res)
 }

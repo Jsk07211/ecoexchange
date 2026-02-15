@@ -59,8 +59,16 @@ async def create_dynamic_table(req: DynamicTableRequest):
 
     _validate_identifier(db_name, "project_name")
     _validate_identifier(table_name, "table_name")
+
+    # Deduplicate fields by name (keep first occurrence)
+    seen_names: set[str] = set()
+    unique_fields = []
     for field in req.fields:
         _validate_identifier(field.name, "field name")
+        if field.name.lower() not in seen_names:
+            seen_names.add(field.name.lower())
+            unique_fields.append(field)
+    req_fields = unique_fields
 
     conn_params = _parse_conn_params()
 
@@ -80,7 +88,7 @@ async def create_dynamic_table(req: DynamicTableRequest):
     project_conn = await asyncpg.connect(dsn=_project_dsn(db_name))
     try:
         column_defs = ["id SERIAL PRIMARY KEY"]
-        for field in req.fields:
+        for field in req_fields:
             column_defs.append(f'"{field.name}" {field.type.sql_type}')
         column_defs.append("created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
@@ -93,7 +101,7 @@ async def create_dynamic_table(req: DynamicTableRequest):
 
     columns = (
         ["id (SERIAL PRIMARY KEY)"]
-        + [f"{f.name} ({f.type.sql_type})" for f in req.fields]
+        + [f"{f.name} ({f.type.sql_type})" for f in req_fields]
         + ["created_at (TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"]
     )
 

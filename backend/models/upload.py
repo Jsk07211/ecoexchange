@@ -9,14 +9,12 @@ class FileInfo(BaseModel):
     file_type: Literal["image", "text", "video", "unknown"]
 
 
+class QualityWarning(BaseModel):
+    check: str = Field(description="Check name, e.g. blur, exposure, noise")
+    message: str = Field(description="Human-readable explanation, e.g. 'Blurry because ...'")
+
+
 class QualityScanResult(BaseModel):
-    """Result of a quality scan on an uploaded file.
-
-    Replace the stub ``run_quality_scan`` function with real logic
-    (e.g. resolution check, blur detection, EXIF validation) to
-    populate these fields with meaningful values.
-    """
-
     score: float = Field(
         default=100.0,
         ge=0.0,
@@ -29,7 +27,11 @@ class QualityScanResult(BaseModel):
     )
     reason: str = Field(
         default="Good",
-        description="Human-readable explanation of the quality verdict.",
+        description="Human-readable summary of the quality verdict.",
+    )
+    warnings: list[QualityWarning] = Field(
+        default_factory=list,
+        description="Individual quality issues found.",
     )
 
 

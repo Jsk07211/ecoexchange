@@ -15,3 +15,18 @@ class Program(BaseModel):
     tags: list[str]
     deadline: Optional[str] = None
     contribution_spec: Optional[dict] = None
+    project_name: Optional[str] = None
+    table_name: Optional[str] = None
+
+
+class ProgramCreate(BaseModel):
+    title: str
+    organization: str = ""
+    category: str = "Biodiversity"
+    description: str = ""
+    location: str = ""
+    tags: list[str] = []
+    project_name: Optional[str] = None
+    table_name: Optional[str] = None
+    accepted_files: list[str] = []
+    fields: list[dict] = []

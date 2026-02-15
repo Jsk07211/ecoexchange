@@ -10,6 +10,7 @@ class FieldType(str, Enum):
     BOOLEAN = "BOOLEAN"
     DATE = "DATE"
     TEXT = "TEXT"
+    IMAGE = "IMAGE"
 
     @property
     def sql_type(self) -> str:
@@ -20,6 +21,7 @@ class FieldType(str, Enum):
             FieldType.BOOLEAN: "BOOLEAN",
             FieldType.DATE: "DATE",
             FieldType.TEXT: "TEXT",
+            FieldType.IMAGE: "TEXT",
         }
         return mapping[self]
 

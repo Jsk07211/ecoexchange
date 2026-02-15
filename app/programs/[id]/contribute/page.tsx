@@ -12,6 +12,7 @@ import {
   ImageIcon,
   X,
 } from "lucide-react"
+
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -30,25 +31,6 @@ import { getProjectTables } from "@/lib/api/tables"
 import { insertRow, insertRowsBatch } from "@/lib/api/tables"
 import { uploadFiles } from "@/lib/api/uploads"
 import type { Program, ContributionField } from "@/lib/types"
-
-interface ImagePreview {
-  file: File
-  localUrl: string
-  serverUrl?: string
-  species: string
-  description: string
-  qualityScore?: number
-  qualityReason?: string
-}
-
-function labelFromFilename(filename: string): string {
-  const stem = filename.includes(".") ? filename.split(".").slice(0, -1).join(".") : filename
-  return stem
-    .replace(/[-_]+/g, " ")
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/\b\w/g, (c) => c.toUpperCase())
-    .trim()
-}
 
 function fieldInput(
   field: ContributionField,
@@ -123,25 +105,23 @@ export default function ContributePage() {
   const { id } = useParams<{ id: string }>()
 
   const [program, setProgram] = useState<Program | null>(null)
+  const [projectKey, setProjectKey] = useState(id)
   const [tableName, setTableName] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   // Single entry state
   const [formData, setFormData] = useState<Record<string, string | boolean>>({})
+  const [formImages, setFormImages] = useState<Record<string, { file: File; preview: string }>>({})
   const [submitting, setSubmitting] = useState(false)
   const [submitSuccess, setSubmitSuccess] = useState(false)
 
   // Batch state
   const [csvRows, setCsvRows] = useState<Record<string, string>[]>([])
+  const [batchImages, setBatchImages] = useState<File[]>([])
   const [csvError, setCsvError] = useState<string | null>(null)
   const [batchSubmitting, setBatchSubmitting] = useState(false)
   const [batchResult, setBatchResult] = useState<number | null>(null)
-
-  // Image upload state: "select" → "validated" → "confirmed"
-  const [imagePreviews, setImagePreviews] = useState<ImagePreview[]>([])
-  const [imageStep, setImageStep] = useState<"select" | "validating" | "validated" | "confirming" | "confirmed">("select")
-  const [imageError, setImageError] = useState<string | null>(null)
 
   useEffect(() => {
     async function load() {
@@ -162,7 +142,9 @@ export default function ContributePage() {
 
         // Get the sightings table for this project (skip image tables)
         try {
-          const res = await getProjectTables(id)
+          const pk = prog.projectName || id
+          setProjectKey(pk)
+          const res = await getProjectTables(pk)
           const dataTable = res.tables.find((t) => t === "sightings") ?? res.tables.find((t) => !t.includes("image")) ?? res.tables[0]
           if (dataTable) setTableName(dataTable)
         } catch {
@@ -187,6 +169,7 @@ export default function ContributePage() {
       try {
         const data: Record<string, unknown> = {}
         for (const field of program.contributionSpec.fields) {
+          if (field.type === "IMAGE") continue // handled below
           const raw = formData[field.name]
           if (field.type === "BOOLEAN") {
             data[field.name] = !!raw
@@ -199,15 +182,33 @@ export default function ContributePage() {
           }
         }
 
-        await insertRow(id, tableName, data)
+        // Upload any image fields and add their URLs to the row
+        const imageFields = program.contributionSpec.fields.filter((f) => f.type === "IMAGE")
+        for (const field of imageFields) {
+          const img = formImages[field.name]
+          if (img) {
+            const uploadRes = await uploadFiles([img.file], projectKey)
+            const result = uploadRes.results[0]
+            if (result?.url) {
+              data[field.name] = result.url
+            }
+          }
+        }
+
+        await insertRow(projectKey, tableName, data)
         setSubmitSuccess(true)
 
         // Reset form
         const reset: Record<string, string | boolean> = {}
         for (const f of program.contributionSpec.fields) {
-          reset[f.name] = f.type === "BOOLEAN" ? false : ""
+          if (f.type !== "IMAGE") reset[f.name] = f.type === "BOOLEAN" ? false : ""
         }
         setFormData(reset)
+        // Revoke all image previews
+        for (const img of Object.values(formImages)) {
+          URL.revokeObjectURL(img.preview)
+        }
+        setFormImages({})
         setTimeout(() => setSubmitSuccess(false), 3000)
       } catch (err) {
         setError(err instanceof Error ? err.message : "Submission failed")
@@ -215,36 +216,93 @@ export default function ContributePage() {
         setSubmitting(false)
       }
     },
-    [program, tableName, formData, id]
+    [program, tableName, formData, formImages, projectKey]
   )
 
-  const handleCsvFile = useCallback(
-    (file: File) => {
+  const imageExtensions = new Set(["jpg", "jpeg", "png", "webp"])
+  const isImageFile = (f: File) => {
+    const ext = f.name.split(".").pop()?.toLowerCase() ?? ""
+    return imageExtensions.has(ext) || f.type.startsWith("image/")
+  }
+
+  const handleBatchFiles = useCallback(
+    (fileList: FileList) => {
       setCsvError(null)
       setBatchResult(null)
-      const reader = new FileReader()
-      reader.onload = (e) => {
-        const text = e.target?.result as string
-        const rows = parseCsv(text)
-        if (rows.length === 0) {
-          setCsvError("CSV file is empty or has no data rows")
-          return
-        }
 
-        // Validate headers against spec fields
-        if (program?.contributionSpec) {
-          const expected = new Set(program.contributionSpec.fields.map((f) => f.name))
-          const actual = new Set(Object.keys(rows[0]))
-          const missing = [...expected].filter((h) => !actual.has(h))
-          if (missing.length > 0) {
-            setCsvError(`Missing required columns: ${missing.join(", ")}`)
+      const allFiles = Array.from(fileList)
+      const csvFile = allFiles.find((f) => f.name.endsWith(".csv"))
+      const images = allFiles.filter((f) => isImageFile(f))
+
+      // Store images for later upload
+      if (images.length > 0) {
+        setBatchImages(images)
+      }
+
+      if (csvFile) {
+        // CSV + possibly images mode
+        const reader = new FileReader()
+        reader.onload = (e) => {
+          const text = e.target?.result as string
+          const rows = parseCsv(text)
+          if (rows.length === 0) {
+            setCsvError("CSV file is empty or has no data rows")
             return
           }
-        }
 
+          if (program?.contributionSpec) {
+            const imageFieldNames = new Set(
+              program.contributionSpec.fields.filter((f) => f.type === "IMAGE").map((f) => f.name)
+            )
+            const nonImageFields = program.contributionSpec.fields.filter((f) => f.type !== "IMAGE")
+            const actual = new Set(Object.keys(rows[0]))
+            // Only require non-IMAGE columns; IMAGE columns in CSV are optional (contain filenames)
+            const missing = nonImageFields.filter((f) => !actual.has(f.name)).map((f) => f.name)
+            if (missing.length > 0) {
+              setCsvError(`Missing columns: ${missing.join(", ")}`)
+              return
+            }
+
+            // If CSV doesn't have an IMAGE column but images were selected,
+            // auto-assign images to rows by order
+            if (images.length > 0) {
+              const csvHasImageCol = [...imageFieldNames].some((n) => actual.has(n))
+              if (!csvHasImageCol && imageFieldNames.size > 0) {
+                const imgFieldName = [...imageFieldNames][0]
+                rows.forEach((row, i) => {
+                  row[imgFieldName] = images[i]?.name ?? ""
+                })
+              }
+            }
+          }
+
+          setCsvRows(rows)
+        }
+        reader.readAsText(csvFile)
+      } else if (images.length > 0 && !csvFile) {
+        // Images only — auto-generate rows from filenames
+        const imageFields = program?.contributionSpec?.fields.filter((f) => f.type === "IMAGE") ?? []
+        const stringFields = program?.contributionSpec?.fields.filter(
+          (f) => f.type === "STRING" || f.type === "TEXT"
+        ) ?? []
+
+        const rows = images.map((img) => {
+          const row: Record<string, string> = {}
+          // Use filename (without extension) as the first string field value
+          const stem = img.name.includes(".") ? img.name.split(".").slice(0, -1).join(".") : img.name
+          const label = stem.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()).trim()
+
+          if (stringFields.length > 0) {
+            row[stringFields[0].name] = label
+          }
+          // Set the image field to the filename (will be resolved on upload)
+          if (imageFields.length > 0) {
+            row[imageFields[0].name] = img.name
+          }
+          return row
+        })
         setCsvRows(rows)
       }
-      reader.readAsText(file)
     },
     [program]
   )
@@ -254,101 +312,47 @@ export default function ContributePage() {
 
     setBatchSubmitting(true)
     setBatchResult(null)
+    setCsvError(null)
     try {
+      const imageFields = program.contributionSpec.fields.filter((f) => f.type === "IMAGE")
+
+      // Upload all batch images and build a filename → URL map
+      const filenameToUrl: Record<string, string> = {}
+      if (batchImages.length > 0) {
+        const uploadRes = await uploadFiles(batchImages, projectKey)
+        for (const result of uploadRes.results) {
+          if (result.url) {
+            filenameToUrl[result.filename] = result.url
+          }
+        }
+      }
+
       const coerced = csvRows.map((row) => {
         const out: Record<string, unknown> = {}
         for (const field of program.contributionSpec!.fields) {
-          if (row[field.name] !== undefined) {
+          if (row[field.name] === undefined) continue
+
+          if (field.type === "IMAGE") {
+            // Replace filename with uploaded URL
+            const filename = row[field.name]
+            out[field.name] = filenameToUrl[filename] ?? filename
+          } else {
             out[field.name] = coerceValue(row[field.name], field.type)
           }
         }
         return out
       })
 
-      const res = await insertRowsBatch(id, tableName, coerced)
+      const res = await insertRowsBatch(projectKey, tableName, coerced)
       setBatchResult(res.count)
       setCsvRows([])
+      setBatchImages([])
     } catch (err) {
       setCsvError(err instanceof Error ? err.message : "Batch upload failed")
     } finally {
       setBatchSubmitting(false)
     }
-  }, [program, tableName, csvRows, id])
-
-  const handleImageSelect = useCallback((fileList: FileList) => {
-    const accepted = Array.from(fileList).filter((f) =>
-      ["image/jpeg", "image/png", "image/webp"].includes(f.type)
-    )
-    if (accepted.length === 0) return
-    setImageError(null)
-    setImageStep("select")
-    const newPreviews: ImagePreview[] = accepted.map((file) => ({
-      file,
-      localUrl: URL.createObjectURL(file),
-      species: labelFromFilename(file.name),
-      description: "",
-    }))
-    setImagePreviews((prev) => [...prev, ...newPreviews])
-  }, [])
-
-  const updateImageLabel = useCallback((index: number, field: "species" | "description", value: string) => {
-    setImagePreviews((prev) =>
-      prev.map((p, i) => (i === index ? { ...p, [field]: value } : p))
-    )
-  }, [])
-
-  const removeImage = useCallback((index: number) => {
-    setImagePreviews((prev) => {
-      const removed = prev[index]
-      URL.revokeObjectURL(removed.localUrl)
-      return prev.filter((_, i) => i !== index)
-    })
-  }, [])
-
-  const handleValidate = useCallback(async () => {
-    if (imagePreviews.length === 0) return
-    setImageStep("validating")
-    setImageError(null)
-    try {
-      const files = imagePreviews.map((p) => p.file)
-      const res = await uploadFiles(files, id)
-      setImagePreviews((prev) =>
-        prev.map((p, i) => ({
-          ...p,
-          serverUrl: res.results[i]?.url ?? undefined,
-          qualityScore: res.results[i]?.quality.score,
-          qualityReason: res.results[i]?.quality.reason,
-          species: p.species || res.results[i]?.detectedLabel || "",
-        }))
-      )
-      setImageStep("validated")
-    } catch (err) {
-      setImageError(err instanceof Error ? err.message : "Validation failed")
-      setImageStep("select")
-    }
-  }, [imagePreviews, id])
-
-  const handleConfirmUpload = useCallback(async () => {
-    setImageStep("confirming")
-    setImageError(null)
-    try {
-      for (const img of imagePreviews) {
-        if (img.serverUrl) {
-          const row: Record<string, unknown> = {
-            image_url: img.serverUrl,
-            quality_score: img.qualityScore ?? 100,
-          }
-          if (img.species) row.species = img.species
-          if (img.description) row.description = img.description
-          await insertRow(id, "bird_images", row)
-        }
-      }
-      setImageStep("confirmed")
-    } catch (err) {
-      setImageError(err instanceof Error ? err.message : "Save failed")
-      setImageStep("validated")
-    }
-  }, [imagePreviews, id])
+  }, [program, tableName, csvRows, batchImages, projectKey])
 
   if (loading) {
     return (
@@ -389,7 +393,7 @@ export default function ContributePage() {
   }
 
   const spec = program.contributionSpec
-  const acceptsImages = spec.accepted_files?.includes("image")
+  const hasImageFields = spec.fields.some((f) => f.type === "IMAGE")
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-10 lg:px-8">
@@ -411,9 +415,6 @@ export default function ContributePage() {
         <TabsList>
           <TabsTrigger value="single">Single Entry</TabsTrigger>
           <TabsTrigger value="batch">Batch Upload</TabsTrigger>
-          {acceptsImages && (
-            <TabsTrigger value="images">Images</TabsTrigger>
-          )}
         </TabsList>
 
         {/* Single Entry Tab */}
@@ -421,8 +422,62 @@ export default function ContributePage() {
           <form onSubmit={handleSingleSubmit} className="space-y-4">
             {spec.fields.map((field) => (
               <div key={field.name}>
-                {fieldInput(field, formData[field.name] ?? "", (val) =>
-                  setFormData((prev) => ({ ...prev, [field.name]: val }))
+                {field.type === "IMAGE" ? (
+                  <div className="space-y-1.5">
+                    <Label className="text-sm font-medium">
+                      {field.description ?? field.name}
+                    </Label>
+                    {formImages[field.name] ? (
+                      <div className="relative inline-block">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={formImages[field.name].preview}
+                          alt="Preview"
+                          className="h-32 w-32 rounded-lg object-cover border border-border"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            URL.revokeObjectURL(formImages[field.name].preview)
+                            setFormImages((prev) => {
+                              const next = { ...prev }
+                              delete next[field.name]
+                              return next
+                            })
+                          }}
+                          className="absolute -right-2 -top-2 rounded-full bg-destructive p-1 text-destructive-foreground"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div
+                        className="flex cursor-pointer items-center gap-3 rounded-lg border-2 border-dashed border-border p-4 transition-colors hover:border-primary/40"
+                        onClick={() => {
+                          const input = document.createElement("input")
+                          input.type = "file"
+                          input.accept = "image/jpeg,image/png,image/webp"
+                          input.onchange = () => {
+                            const file = input.files?.[0]
+                            if (file) {
+                              setFormImages((prev) => ({
+                                ...prev,
+                                [field.name]: { file, preview: URL.createObjectURL(file) },
+                              }))
+                            }
+                          }
+                          input.click()
+                        }}
+                      >
+                        <ImageIcon className="h-5 w-5 text-muted-foreground" />
+                        <span className="text-sm text-muted-foreground">Click to add a photo</span>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  fieldInput(field, formData[field.name] ?? "", (val) =>
+                    setFormData((prev) => ({ ...prev, [field.name]: val }))
+                  )
                 )}
               </div>
             ))}
@@ -463,28 +518,62 @@ export default function ContributePage() {
             onDrop={(e) => {
               e.preventDefault()
               e.stopPropagation()
-              const file = e.dataTransfer.files[0]
-              if (file) handleCsvFile(file)
+              if (e.dataTransfer.files.length > 0) handleBatchFiles(e.dataTransfer.files)
             }}
             onClick={() => {
               const input = document.createElement("input")
               input.type = "file"
-              input.accept = ".csv"
+              input.accept = hasImageFields ? ".csv,image/jpeg,image/png,image/webp" : ".csv"
+              input.multiple = true
               input.onchange = () => {
-                const file = input.files?.[0]
-                if (file) handleCsvFile(file)
+                if (input.files && input.files.length > 0) handleBatchFiles(input.files)
               }
               input.click()
             }}
           >
-            <FileSpreadsheet className="h-8 w-8 text-muted-foreground" />
+            {hasImageFields ? (
+              <div className="flex items-center gap-2">
+                <FileSpreadsheet className="h-7 w-7 text-muted-foreground" />
+                <span className="text-muted-foreground">/</span>
+                <ImageIcon className="h-7 w-7 text-muted-foreground" />
+              </div>
+            ) : (
+              <FileSpreadsheet className="h-8 w-8 text-muted-foreground" />
+            )}
             <p className="text-sm font-medium text-foreground">
-              Drop a CSV file here or click to browse
+              {hasImageFields
+                ? "Drop CSV + images, images only, or a CSV here"
+                : "Drop a CSV file here or click to browse"}
             </p>
             <p className="text-xs text-muted-foreground">
-              Expected headers: {spec.fields.map((f) => f.name).join(", ")}
+              {hasImageFields
+                ? "CSV + images: match by filename. Images only: auto-fills name from filename."
+                : `Expected headers: ${spec.fields.map((f) => f.name).join(", ")}`}
             </p>
           </div>
+
+          {batchImages.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-foreground">
+                {batchImages.length} image{batchImages.length > 1 ? "s" : ""} selected
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {batchImages.map((img, i) => (
+                  <div key={i} className="relative group">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={URL.createObjectURL(img)}
+                      alt={img.name}
+                      className="h-16 w-16 rounded-md object-cover border border-border"
+                    />
+                    <span className="absolute bottom-0 left-0 right-0 truncate bg-black/60 px-1 text-[10px] text-white rounded-b-md">
+                      {img.name}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {csvError && (
             <div className="rounded-lg border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
@@ -501,23 +590,30 @@ export default function ContributePage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      {spec.fields.map((f) => (
-                        <TableHead key={f.name}>{f.name}</TableHead>
+                      {Object.keys(csvRows[0]).map((col) => (
+                        <TableHead key={col}>{col}</TableHead>
                       ))}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {csvRows.slice(0, 10).map((row, i) => (
                       <TableRow key={i}>
-                        {spec.fields.map((f) => (
-                          <TableCell key={f.name}>{row[f.name]}</TableCell>
-                        ))}
+                        {Object.entries(row).map(([col, val]) => {
+                          const isImg = spec.fields.find((f) => f.name === col)?.type === "IMAGE"
+                          return (
+                            <TableCell key={col}>
+                              {isImg
+                                ? <span className="flex items-center gap-1 text-xs"><ImageIcon className="h-3 w-3" />{val}</span>
+                                : val}
+                            </TableCell>
+                          )
+                        })}
                       </TableRow>
                     ))}
                     {csvRows.length > 10 && (
                       <TableRow>
                         <TableCell
-                          colSpan={spec.fields.length}
+                          colSpan={Object.keys(csvRows[0]).length}
                           className="text-center text-xs text-muted-foreground"
                         >
                           ... and {csvRows.length - 10} more rows
@@ -535,12 +631,12 @@ export default function ContributePage() {
                 {batchSubmitting ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Uploading...
+                    Uploading{batchImages.length > 0 ? ` (${batchImages.length} images + ${csvRows.length} rows)` : ""}...
                   </>
                 ) : (
                   <>
                     <Upload className="mr-2 h-4 w-4" />
-                    Upload {csvRows.length} rows
+                    Upload {csvRows.length} rows{batchImages.length > 0 ? ` + ${batchImages.length} images` : ""}
                   </>
                 )}
               </Button>
@@ -555,184 +651,6 @@ export default function ContributePage() {
           )}
         </TabsContent>
 
-        {/* Images Tab */}
-        {acceptsImages && (
-          <TabsContent value="images" className="mt-6 space-y-4">
-            {/* Step indicator */}
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <span className={imageStep === "select" ? "font-semibold text-foreground" : ""}>
-                1. Select
-              </span>
-              <span>&rarr;</span>
-              <span className={imageStep === "validating" || imageStep === "validated" ? "font-semibold text-foreground" : ""}>
-                2. Validate
-              </span>
-              <span>&rarr;</span>
-              <span className={imageStep === "confirming" || imageStep === "confirmed" ? "font-semibold text-foreground" : ""}>
-                3. Confirm
-              </span>
-            </div>
-
-            {/* Drop zone — visible during select step */}
-            {(imageStep === "select") && (
-              <div
-                className="flex cursor-pointer flex-col items-center gap-2 rounded-xl border-2 border-dashed border-border p-8 text-center transition-colors hover:border-primary/40"
-                onDragOver={(e) => {
-                  e.preventDefault()
-                  e.stopPropagation()
-                }}
-                onDrop={(e) => {
-                  e.preventDefault()
-                  e.stopPropagation()
-                  if (e.dataTransfer.files.length > 0) {
-                    handleImageSelect(e.dataTransfer.files)
-                  }
-                }}
-                onClick={() => {
-                  const input = document.createElement("input")
-                  input.type = "file"
-                  input.accept = "image/jpeg,image/png,image/webp"
-                  input.multiple = true
-                  input.onchange = () => {
-                    if (input.files && input.files.length > 0) {
-                      handleImageSelect(input.files)
-                    }
-                  }
-                  input.click()
-                }}
-              >
-                <ImageIcon className="h-8 w-8 text-muted-foreground" />
-                <p className="text-sm font-medium text-foreground">
-                  Drop images here or click to browse
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  Accepts JPG, PNG, and WebP
-                </p>
-              </div>
-            )}
-
-            {imageError && (
-              <div className="rounded-lg border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-                {imageError}
-              </div>
-            )}
-
-            {imagePreviews.length > 0 && (
-              <>
-                {/* Image cards */}
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  {imagePreviews.map((img, i) => (
-                    <div
-                      key={i}
-                      className={`group relative overflow-hidden rounded-lg border ${
-                        imageStep === "validated" && img.qualityScore !== undefined && img.qualityScore < 50
-                          ? "border-destructive/40"
-                          : "border-border"
-                      }`}
-                    >
-                      <div className="relative aspect-video">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={img.serverUrl ? `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}${img.serverUrl}` : img.localUrl}
-                          alt={img.file.name}
-                          className="h-full w-full object-cover"
-                        />
-                        {imageStep !== "confirmed" && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              removeImage(i)
-                            }}
-                            className="absolute right-1 top-1 rounded-full bg-black/60 p-1 text-white opacity-0 transition-opacity group-hover:opacity-100"
-                          >
-                            <X className="h-3.5 w-3.5" />
-                          </button>
-                        )}
-                      </div>
-                      <div className="space-y-2 p-3">
-                        <Input
-                          placeholder="Species name"
-                          value={img.species}
-                          onChange={(e) => updateImageLabel(i, "species", e.target.value)}
-                          disabled={imageStep === "confirmed"}
-                        />
-                        <Input
-                          placeholder="Description (optional)"
-                          value={img.description}
-                          onChange={(e) => updateImageLabel(i, "description", e.target.value)}
-                          disabled={imageStep === "confirmed"}
-                        />
-                        {img.qualityScore !== undefined && (
-                          <div className="flex items-center gap-2 text-xs">
-                            <span className={`inline-flex items-center rounded-full px-2 py-0.5 font-medium ${
-                              img.qualityScore >= 80
-                                ? "bg-primary/10 text-primary"
-                                : img.qualityScore >= 50
-                                  ? "bg-yellow-500/10 text-yellow-600"
-                                  : "bg-destructive/10 text-destructive"
-                            }`}>
-                              Quality: {img.qualityScore}%
-                            </span>
-                            <span className="text-muted-foreground">{img.qualityReason}</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Action buttons per step */}
-                <div className="flex items-center gap-3">
-                  {imageStep === "select" && (
-                    <Button onClick={handleValidate}>
-                      <Upload className="mr-2 h-4 w-4" />
-                      Validate {imagePreviews.length} image{imagePreviews.length !== 1 ? "s" : ""}
-                    </Button>
-                  )}
-
-                  {imageStep === "validating" && (
-                    <Button disabled>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Validating...
-                    </Button>
-                  )}
-
-                  {imageStep === "validated" && (
-                    <>
-                      <Button onClick={handleConfirmUpload}>
-                        <CheckCircle2 className="mr-2 h-4 w-4" />
-                        Confirm &amp; Save {imagePreviews.length} image{imagePreviews.length !== 1 ? "s" : ""}
-                      </Button>
-                      <Button
-                        variant="outline"
-                        onClick={() => {
-                          setImageStep("select")
-                        }}
-                      >
-                        Back
-                      </Button>
-                    </>
-                  )}
-
-                  {imageStep === "confirming" && (
-                    <Button disabled>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Saving...
-                    </Button>
-                  )}
-
-                  {imageStep === "confirmed" && (
-                    <div className="flex items-center gap-1.5 text-sm text-primary">
-                      <CheckCircle2 className="h-4 w-4" />
-                      {imagePreviews.length} image{imagePreviews.length !== 1 ? "s" : ""} saved successfully
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
-          </TabsContent>
-        )}
       </Tabs>
     </div>
   )

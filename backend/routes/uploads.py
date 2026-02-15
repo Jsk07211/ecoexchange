@@ -4,7 +4,8 @@ import uuid
 
 from fastapi import APIRouter, UploadFile, File, Form
 
-from backend.models.upload import QualityScanResult, UploadFilterResult, UploadResponse
+from backend.models.upload import QualityScanResult, QualityWarning, UploadFilterResult, UploadResponse
+from backend.qualify_image import check_quality
 
 UPLOAD_DIR = "/app/uploads"
 
@@ -54,16 +55,24 @@ def _label_from_filename(filename: str) -> str:
 async def _run_quality_scan(
     file: UploadFile, file_type: str, contents: bytes
 ) -> QualityScanResult:
-    """Stub quality scanner — always returns 100 / Good.
+    if file_type != "image":
+        return QualityScanResult(score=100.0, passed=True, reason="Good")
 
-    Replace this with real checks per-program criteria, e.g.:
-      - Minimum resolution (width × height)
-      - Blur / sharpness detection
-      - EXIF metadata presence
-      - File size limits
-      - NSFW / content-policy filtering
-    """
-    return QualityScanResult(score=100.0, passed=True, reason="Good")
+    result = check_quality(contents)
+    warnings = [QualityWarning(**w) for w in result["warnings"]]
+    score = result["score"]
+
+    if warnings:
+        reason = "; ".join(w.message for w in warnings)
+    else:
+        reason = "Good"
+
+    return QualityScanResult(
+        score=score,
+        passed=result["passed"],
+        reason=reason,
+        warnings=warnings,
+    )
 
 
 async def _ai_filter(file: UploadFile, file_type: str, contents: bytes) -> UploadFilterResult:

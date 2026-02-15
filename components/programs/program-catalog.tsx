@@ -1,11 +1,11 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Search, MapPin, Users, Database, Calendar, Filter, X, Loader2 } from "lucide-react"
+import { Search, MapPin, Users, Database, Calendar, Filter, X, Loader2, Trash2 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { getPrograms } from "@/lib/api/programs"
+import { getPrograms, deleteProgram } from "@/lib/api/programs"
 import type { Program } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import Link from "next/link"
@@ -21,6 +21,7 @@ export function ProgramCatalog() {
   const [programs, setPrograms] = useState<Program[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState<string | null>(null)
 
   useEffect(() => {
     setLoading(true)
@@ -35,6 +36,20 @@ export function ProgramCatalog() {
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false))
   }, [selectedCategory, selectedStatus, searchQuery])
+
+  const handleDelete = async (e: React.MouseEvent, programId: string) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setDeleting(programId)
+    try {
+      await deleteProgram(programId)
+      setPrograms((prev) => prev.filter((p) => p.id !== programId))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete")
+    } finally {
+      setDeleting(null)
+    }
+  }
 
   const hasActiveFilters = selectedCategory !== "All" || selectedStatus !== "All" || searchQuery !== ""
 
@@ -255,8 +270,21 @@ export function ProgramCatalog() {
 
                 {/* Actions */}
                 <div className="mt-4 flex gap-2">
-                  <Button size="sm" className="w-full" asChild>
+                  <Button size="sm" className="flex-1" asChild>
                     <span>View Program</span>
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive hover:border-destructive/20"
+                    onClick={(e) => handleDelete(e, program.id)}
+                    disabled={deleting === program.id}
+                  >
+                    {deleting === program.id ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-4 w-4" />
+                    )}
                   </Button>
                 </div>
               </Link>

@@ -1,5 +1,5 @@
 from sqlalchemy import Integer, String, Text
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSON, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base
@@ -20,6 +20,8 @@ class ProgramDB(Base):
     tags: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=[])
     deadline: Mapped[str | None] = mapped_column(String, nullable=True)
     contribution_spec: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    project_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    table_name: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class DatasetDB(Base):
@@ -38,6 +40,16 @@ class DatasetDB(Base):
     downloads: Mapped[int] = mapped_column(Integer, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     tags: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=[])
+
+
+class FormConfigDB(Base):
+    __tablename__ = "form_configs"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    project_name: Mapped[str] = mapped_column(String, nullable=False)
+    table_name: Mapped[str] = mapped_column(String, nullable=False)
+    fields: Mapped[list] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
 
 
 class SubmissionDB(Base):

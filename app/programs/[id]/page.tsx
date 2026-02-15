@@ -24,6 +24,7 @@ export default function ProgramDetailPage() {
   const { id } = useParams<{ id: string }>()
 
   const [program, setProgram] = useState<Program | null>(null)
+  const [projectKey, setProjectKey] = useState(id)
   const [tables, setTables] = useState<string[]>([])
   const [activeTable, setActiveTable] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -38,7 +39,10 @@ export default function ProgramDetailPage() {
         setProgram(prog)
 
         try {
-          const res = await getProjectTables(id)
+          const pk = prog.projectName || id
+          setProjectKey(pk)
+          const projectKey = pk
+          const res = await getProjectTables(projectKey)
           setTables(res.tables)
           if (res.tables.length > 0) setActiveTable(res.tables[0])
         } catch {
@@ -197,7 +201,7 @@ export default function ProgramDetailPage() {
           )}
 
           {activeTable && (
-            <DynamicTableViewer project={id} table={activeTable} />
+            <DynamicTableViewer project={projectKey} table={activeTable} />
           )}
         </div>
       )}

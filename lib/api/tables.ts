@@ -1,4 +1,17 @@
 import { apiFetch } from "./client"
+import type { DynamicTableRequest, DynamicTableResponse } from "../types"
+
+export function createTable(req: DynamicTableRequest) {
+  return apiFetch<DynamicTableResponse>("/api/tables", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      project_name: req.projectName,
+      table_name: req.tableName,
+      fields: req.fields,
+    }),
+  })
+}
 
 export interface ColumnSchema {
   name: string

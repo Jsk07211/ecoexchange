@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils"
 const navigation = [
   { name: "Discover", href: "/" },
   { name: "Programs", href: "/programs" },
+  { name: "Create", href: "/create" },
 ]
 
 export function SiteHeader() {

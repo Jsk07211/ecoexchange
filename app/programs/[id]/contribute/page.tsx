@@ -106,6 +106,7 @@ export default function ContributePage() {
 
   const [program, setProgram] = useState<Program | null>(null)
   const [projectKey, setProjectKey] = useState(id)
+  const [tables, setTables] = useState<string[]>([])
   const [tableName, setTableName] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -140,13 +141,13 @@ export default function ContributePage() {
           setFormData(initial)
         }
 
-        // Get the sightings table for this project (skip image tables)
+        // Get all tables for this project
         try {
           const pk = prog.projectName || id
           setProjectKey(pk)
           const res = await getProjectTables(pk)
-          const dataTable = res.tables.find((t) => t === "sightings") ?? res.tables.find((t) => !t.includes("image")) ?? res.tables[0]
-          if (dataTable) setTableName(dataTable)
+          setTables(res.tables)
+          if (res.tables.length > 0) setTableName(res.tables[0])
         } catch {
           // No tables yet
         }
@@ -410,6 +411,24 @@ export default function ContributePage() {
       <p className="mt-1 text-sm text-muted-foreground">
         Submit observations to the {tableName ?? "project"} dataset.
       </p>
+
+      {tables.length > 1 && (
+        <div className="mt-4 flex flex-wrap gap-2">
+          {tables.map((t) => (
+            <button
+              key={t}
+              onClick={() => setTableName(t)}
+              className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                tableName === t
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted"
+              }`}
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+      )}
 
       <Tabs defaultValue="single" className="mt-8">
         <TabsList>

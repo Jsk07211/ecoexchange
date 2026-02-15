@@ -126,9 +126,74 @@ export default function ContributePage() {
   // Batch state
   const [csvRows, setCsvRows] = useState<Record<string, string>[]>([])
   const [batchImages, setBatchImages] = useState<File[]>([])
+  const [batchImageResults, setBatchImageResults] = useState<Record<string, { quality: { score: number; warnings: { check: string; message: string }[] }; cnn: CnnResult | null; checking: boolean }>>({})
   const [csvError, setCsvError] = useState<string | null>(null)
   const [batchSubmitting, setBatchSubmitting] = useState(false)
   const [batchResult, setBatchResult] = useState<number | null>(null)
+
+  // Helper: load schema for a given table and set activeFields + formData
+  const loadTableSchema = useCallback(
+    async (prog: Program, pk: string, table: string) => {
+      const specFields = prog.contributionSpec?.fields ?? []
+      try {
+        const schema = await getTableSchema(pk, table)
+        const dataCols = schema.columns.filter(
+          (c) => c.name !== "id" && c.name !== "created_at"
+        )
+        const fields: ContributionField[] = dataCols.map((col, colIdx) => {
+          const specMatch =
+            specFields.find((s) => s.name === col.name) ??
+            specFields[colIdx]
+          let fieldType: ContributionField["type"] = "STRING"
+          if (specMatch) {
+            fieldType = specMatch.type
+          } else if (col.type.includes("int")) {
+            fieldType = "INT"
+          } else if (col.type.includes("float") || col.type.includes("double") || col.type.includes("numeric")) {
+            fieldType = "FLOAT"
+          } else if (col.type.includes("bool")) {
+            fieldType = "BOOLEAN"
+          } else if (col.type.includes("date")) {
+            fieldType = "DATE"
+          }
+          return {
+            name: col.name,
+            type: fieldType,
+            required: specMatch?.required ?? false,
+            description: specMatch?.description ?? col.name,
+          }
+        })
+        setActiveFields(fields)
+        const initial: Record<string, string | boolean> = {}
+        for (const f of fields) {
+          initial[f.name] = f.type === "BOOLEAN" ? false : ""
+        }
+        setFormData(initial)
+      } catch {
+        setActiveFields(specFields)
+        const initial: Record<string, string | boolean> = {}
+        for (const f of specFields) {
+          initial[f.name] = f.type === "BOOLEAN" ? false : ""
+        }
+        setFormData(initial)
+      }
+      // Clear image state when switching tables
+      for (const img of Object.values(formImages)) {
+        URL.revokeObjectURL(img.preview)
+      }
+      setFormImages({})
+      setImageCnn({})
+      setImageQuality({})
+      setImageChecking({})
+      setCsvRows([])
+      setBatchImages([])
+      setBatchImageResults({})
+      setBatchResult(null)
+      setCsvError(null)
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  )
 
   useEffect(() => {
     async function load() {
@@ -138,7 +203,6 @@ export default function ContributePage() {
         const prog = await getProgram(id)
         setProgram(prog)
 
-        // Get all tables for this project
         const pk = prog.projectName || id
         setProjectKey(pk)
         let firstTable: string | null = null
@@ -153,49 +217,11 @@ export default function ContributePage() {
           // No tables yet
         }
 
-        // Build form fields from actual table schema + spec type info
-        const specFields = prog.contributionSpec?.fields ?? []
         if (firstTable) {
-          try {
-            const schema = await getTableSchema(pk, firstTable)
-            const dataCols = schema.columns.filter(
-              (c) => c.name !== "id" && c.name !== "created_at"
-            )
-            // Match each column to its spec entry for type/description
-            // Try by name first, then by position as fallback
-            const fields: ContributionField[] = dataCols.map((col, colIdx) => {
-              const specMatch =
-                specFields.find((s) => s.name === col.name) ??
-                specFields[colIdx]
-              // Infer type from spec or from SQL type
-              let fieldType: ContributionField["type"] = "STRING"
-              if (specMatch) {
-                fieldType = specMatch.type
-              } else if (col.type.includes("int")) {
-                fieldType = "INT"
-              } else if (col.type.includes("float") || col.type.includes("double") || col.type.includes("numeric")) {
-                fieldType = "FLOAT"
-              } else if (col.type.includes("bool")) {
-                fieldType = "BOOLEAN"
-              } else if (col.type.includes("date")) {
-                fieldType = "DATE"
-              }
-              return {
-                name: col.name,
-                type: fieldType,
-                required: specMatch?.required ?? false,
-                description: specMatch?.description ?? col.name,
-              }
-            })
-            setActiveFields(fields)
-            // Initialize form data from actual column names
-            const initial: Record<string, string | boolean> = {}
-            for (const f of fields) {
-              initial[f.name] = f.type === "BOOLEAN" ? false : ""
-            }
-            setFormData(initial)
-          } catch {
-            // Fallback to spec fields if schema fetch fails
+          await loadTableSchema(prog, pk, firstTable)
+        } else {
+          const specFields = prog.contributionSpec?.fields ?? []
+          if (specFields.length > 0) {
             setActiveFields(specFields)
             const initial: Record<string, string | boolean> = {}
             for (const f of specFields) {
@@ -203,13 +229,6 @@ export default function ContributePage() {
             }
             setFormData(initial)
           }
-        } else if (specFields.length > 0) {
-          setActiveFields(specFields)
-          const initial: Record<string, string | boolean> = {}
-          for (const f of specFields) {
-            initial[f.name] = f.type === "BOOLEAN" ? false : ""
-          }
-          setFormData(initial)
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load program")
@@ -218,7 +237,26 @@ export default function ContributePage() {
       }
     }
     load()
-  }, [id])
+  }, [id, loadTableSchema])
+
+  // Re-load schema when user switches tables
+  const [initialTable, setInitialTable] = useState<string | null>(null)
+  useEffect(() => {
+    if (!tableName || !program || loading) return
+    // Skip on initial load (already handled above)
+    if (initialTable === null) {
+      setInitialTable(tableName)
+      return
+    }
+    if (tableName === initialTable) return
+    setInitialTable(tableName)
+    loadTableSchema(program, projectKey, tableName)
+  }, [tableName, program, projectKey, loading, loadTableSchema, initialTable])
+
+  // Determine the active CNN filter for the current table
+  const activeCnnFilter = tableName
+    ? program?.tableCnn?.[tableName] ?? program?.cnnFilter ?? null
+    : program?.cnnFilter ?? null
 
   const handleSingleSubmit = useCallback(
     async (e: React.FormEvent) => {
@@ -254,7 +292,7 @@ export default function ContributePage() {
           }
           const img = formImages[field.name]
           if (img) {
-            const uploadRes = await uploadFiles([img.file], projectKey)
+            const uploadRes = await uploadFiles([img.file], projectKey, tableName ?? undefined)
             const result = uploadRes.results[0]
             if (result?.url) {
               data[field.name] = result.url
@@ -389,12 +427,29 @@ export default function ContributePage() {
       // Upload all batch images and build a filename → URL map
       const filenameToUrl: Record<string, string> = {}
       if (batchImages.length > 0) {
-        const uploadRes = await uploadFiles(batchImages, projectKey)
+        // Mark all images as checking
+        const checkingState: Record<string, { quality: { score: number; warnings: { check: string; message: string }[] }; cnn: CnnResult | null; checking: boolean }> = {}
+        for (const img of batchImages) {
+          checkingState[img.name] = { quality: { score: 0, warnings: [] }, cnn: null, checking: true }
+        }
+        setBatchImageResults(checkingState)
+
+        const uploadRes = await uploadFiles(batchImages, projectKey, tableName ?? undefined)
+        const resultsState: typeof checkingState = {}
         for (const result of uploadRes.results) {
           if (result.url) {
             filenameToUrl[result.filename] = result.url
           }
+          resultsState[result.filename] = {
+            quality: {
+              score: result.quality.score,
+              warnings: result.quality.warnings,
+            },
+            cnn: result.cnn,
+            checking: false,
+          }
         }
+        setBatchImageResults(resultsState)
       }
 
       const coerced = csvRows.map((row) => {
@@ -513,9 +568,9 @@ export default function ContributePage() {
                   <div className="space-y-1.5">
                     <Label className="text-sm font-medium">
                       {field.description ?? field.name}
-                      {program.cnnFilter && (
+                      {activeCnnFilter && (
                         <span className="ml-2 text-xs font-normal text-muted-foreground">
-                          CNN: {program.cnnFilter}
+                          CNN: {activeCnnFilter}
                         </span>
                       )}
                     </Label>
@@ -614,7 +669,7 @@ export default function ContributePage() {
                               // Eagerly upload to get quality + CNN results
                               setImageChecking((prev) => ({ ...prev, [field.name]: true }))
                               try {
-                                const res = await uploadFiles([file], projectKey)
+                                const res = await uploadFiles([file], projectKey, tableName ?? undefined)
                                 const r = res.results[0]
                                 if (r) {
                                   // Store quality results
@@ -732,20 +787,61 @@ export default function ContributePage() {
               <p className="text-sm font-medium text-foreground">
                 {batchImages.length} image{batchImages.length > 1 ? "s" : ""} selected
               </p>
-              <div className="flex flex-wrap gap-2">
-                {batchImages.map((img, i) => (
-                  <div key={i} className="relative group">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={URL.createObjectURL(img)}
-                      alt={img.name}
-                      className="h-16 w-16 rounded-md object-cover border border-border"
-                    />
-                    <span className="absolute bottom-0 left-0 right-0 truncate bg-black/60 px-1 text-[10px] text-white rounded-b-md">
-                      {img.name}
-                    </span>
-                  </div>
-                ))}
+              <div className="flex flex-wrap gap-3">
+                {batchImages.map((img, i) => {
+                  const result = batchImageResults[img.name]
+                  return (
+                    <div key={i} className="space-y-1">
+                      <div className="relative group">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={URL.createObjectURL(img)}
+                          alt={img.name}
+                          className="h-20 w-20 rounded-md object-cover border border-border"
+                        />
+                        <span className="absolute bottom-0 left-0 right-0 truncate bg-black/60 px-1 text-[10px] text-white rounded-b-md">
+                          {img.name}
+                        </span>
+                        {/* Status overlay */}
+                        {result?.checking && (
+                          <div className="absolute inset-0 flex items-center justify-center bg-black/30 rounded-md">
+                            <Loader2 className="h-5 w-5 animate-spin text-white" />
+                          </div>
+                        )}
+                        {result && !result.checking && (
+                          <div className="absolute -right-1 -top-1">
+                            {result.cnn ? (
+                              result.cnn.matches ? (
+                                <CheckCircle2 className="h-5 w-5 text-green-500 bg-white rounded-full" />
+                              ) : (
+                                <AlertTriangle className="h-5 w-5 text-amber-500 bg-white rounded-full" />
+                              )
+                            ) : result.quality.warnings.length === 0 ? (
+                              <CheckCircle2 className="h-5 w-5 text-green-500 bg-white rounded-full" />
+                            ) : (
+                              <AlertTriangle className="h-5 w-5 text-amber-500 bg-white rounded-full" />
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      {/* Per-image verification details */}
+                      {result && !result.checking && (
+                        <div className="max-w-[80px] space-y-0.5">
+                          {result.quality.warnings.length > 0 && (
+                            <p className="text-[10px] text-amber-600 truncate" title={result.quality.warnings.map(w => w.message).join("; ")}>
+                              {result.quality.warnings[0].message}
+                            </p>
+                          )}
+                          {result.cnn && (
+                            <p className={`text-[10px] truncate ${result.cnn.matches ? "text-green-600" : "text-amber-600"}`} title={result.cnn.message}>
+                              {result.cnn.label}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             </div>
           )}

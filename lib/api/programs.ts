@@ -44,6 +44,7 @@ function mapProgram(p: Record<string, unknown>): Program {
     projectName: p.project_name as string | undefined,
     tableName: p.table_name as string | undefined,
     cnnFilter: p.cnn_filter as string | undefined,
+    tableCnn: p.table_cnn as Record<string, string> | undefined,
   }
 }
 
@@ -67,6 +68,7 @@ export async function createProgram(data: ProgramCreate): Promise<Program> {
       accepted_files: data.acceptedFiles ?? [],
       fields: data.fields ?? [],
       cnn_filter: data.cnnFilter ?? null,
+      table_cnn: data.tableCnn ?? null,
     }),
   })
   return mapProgram(res)

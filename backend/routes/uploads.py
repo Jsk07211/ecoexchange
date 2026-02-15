@@ -124,6 +124,7 @@ async def _ai_filter(
 async def upload_files(
     files: list[UploadFile] = File(...),
     program_id: str = Form(...),
+    table_name: str = Form(""),
     db: AsyncSession = Depends(get_db),
 ):
     # Look up the program's CNN filter setting
@@ -137,7 +138,11 @@ async def upload_files(
         )
         program = result.scalars().first()
     if program:
-        cnn_filter = program.cnn_filter
+        # Check per-table CNN filter first, fall back to program-level
+        if table_name and program.table_cnn and table_name in program.table_cnn:
+            cnn_filter = program.table_cnn[table_name]
+        else:
+            cnn_filter = program.cnn_filter
 
     results: list[UploadFilterResult] = []
 

@@ -52,6 +52,7 @@ const fieldTypes: FieldType[] = ["STRING", "INT", "FLOAT", "BOOLEAN", "DATE", "T
 interface TableDef {
   name: string
   fields: FieldDefinition[]
+  cnnFilter: string
 }
 
 export function CreateForm() {
@@ -66,18 +67,23 @@ export function CreateForm() {
   const [category, setCategory] = useState("Biodiversity")
   const [description, setDescription] = useState("")
   const [location, setLocation] = useState("")
-  const [cnnFilter, setCnnFilter] = useState("")
   const [tables, setTables] = useState<TableDef[]>([
-    { name: "", fields: [{ name: "", type: "STRING" }] },
+    { name: "", fields: [{ name: "", type: "STRING" }], cnnFilter: "" },
   ])
   const [tableResponses, setTableResponses] = useState<DynamicTableResponse[]>([])
 
   const addTable = () => {
-    setTables([...tables, { name: "", fields: [{ name: "", type: "STRING" }] }])
+    setTables([...tables, { name: "", fields: [{ name: "", type: "STRING" }], cnnFilter: "" }])
   }
 
   const removeTable = (tableIndex: number) => {
     setTables(tables.filter((_, i) => i !== tableIndex))
+  }
+
+  const updateTableCnn = (tableIndex: number, cnnFilter: string) => {
+    const updated = [...tables]
+    updated[tableIndex] = { ...updated[tableIndex], cnnFilter }
+    setTables(updated)
   }
 
   const updateTableName = (tableIndex: number, name: string) => {
@@ -156,6 +162,14 @@ export function CreateForm() {
         t.fields.some((f) => f.type === "IMAGE")
       )
 
+      // Build per-table CNN filter map
+      const tableCnn: Record<string, string> = {}
+      tables.forEach((t) => {
+        if (t.cnnFilter) {
+          tableCnn[sanitize(t.name)] = t.cnnFilter
+        }
+      })
+
       // Create all tables
       const tablePromises = tables.map((t) => {
         const validFields = t.fields.filter((f) => f.name.trim())
@@ -190,7 +204,7 @@ export function CreateForm() {
           tableName: primaryTable,
           acceptedFiles: acceptImages ? ["image", "csv"] : ["csv"],
           fields: allFields,
-          cnnFilter: cnnFilter || undefined,
+          tableCnn: Object.keys(tableCnn).length > 0 ? tableCnn : undefined,
         }),
       ])
       setTableResponses(responses)
@@ -250,8 +264,7 @@ export function CreateForm() {
               setCategory("Biodiversity")
               setDescription("")
               setLocation("")
-              setCnnFilter("")
-              setTables([{ name: "", fields: [{ name: "", type: "STRING" }] }])
+              setTables([{ name: "", fields: [{ name: "", type: "STRING" }], cnnFilter: "" }])
               setTableResponses([])
               setError("")
             }}
@@ -404,25 +417,6 @@ export function CreateForm() {
               />
             </div>
 
-            {/* CNN Filter */}
-            <div className="space-y-2">
-              <Label htmlFor="cnn-filter">CNN Image Filter</Label>
-              <Select value={cnnFilter || "none"} onValueChange={(v) => setCnnFilter(v === "none" ? "" : v)}>
-                <SelectTrigger id="cnn-filter">
-                  <SelectValue placeholder="None (disabled)" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">None (disabled)</SelectItem>
-                  <SelectItem value="bird">Birds only</SelectItem>
-                  <SelectItem value="animal">Any animal</SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                Uses MobileNetV2 CNN to verify uploaded images match the expected category.
-                Mismatches show as warnings but don{`'`}t block uploads.
-              </p>
-            </div>
-
             {/* Tables */}
             {tables.map((table, tIdx) => (
               <div
@@ -495,6 +489,26 @@ export function CreateForm() {
                     <Plus className="mr-2 h-4 w-4" />
                     Add Field
                   </Button>
+
+                  {/* Per-table CNN filter */}
+                  {table.fields.some((f) => f.type === "IMAGE") && (
+                    <div className="mt-3 flex items-center gap-2">
+                      <Label className="text-xs text-muted-foreground whitespace-nowrap">CNN Filter</Label>
+                      <Select
+                        value={table.cnnFilter || "none"}
+                        onValueChange={(v) => updateTableCnn(tIdx, v === "none" ? "" : v)}
+                      >
+                        <SelectTrigger className="h-8 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">None</SelectItem>
+                          <SelectItem value="bird">Birds only</SelectItem>
+                          <SelectItem value="animal">Any animal</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}

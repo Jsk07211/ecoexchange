@@ -18,6 +18,7 @@ class Program(BaseModel):
     project_name: Optional[str] = None
     table_name: Optional[str] = None
     cnn_filter: Optional[str] = None
+    table_cnn: Optional[dict] = None
 
 
 class ProgramCreate(BaseModel):
@@ -32,3 +33,4 @@ class ProgramCreate(BaseModel):
     accepted_files: list[str] = []
     fields: list[dict] = []
     cnn_filter: Optional[str] = None
+    table_cnn: Optional[dict] = None

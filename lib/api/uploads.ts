@@ -44,13 +44,15 @@ export interface UploadResponse {
 
 export async function uploadFiles(
   files: File[],
-  programId: string
+  programId: string,
+  tableName?: string
 ): Promise<UploadResponse> {
   const formData = new FormData()
   for (const file of files) {
     formData.append("files", file)
   }
   formData.append("program_id", programId)
+  if (tableName) formData.append("table_name", tableName)
 
   const res = await fetch(`${API_BASE}/api/uploads`, {
     method: "POST",

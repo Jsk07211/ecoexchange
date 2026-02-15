@@ -26,6 +26,7 @@ export interface Program {
   projectName?: string
   tableName?: string
   cnnFilter?: string
+  tableCnn?: Record<string, string>
 }
 
 export type FieldType = "INT" | "STRING" | "FLOAT" | "BOOLEAN" | "DATE" | "TEXT" | "IMAGE"
@@ -60,6 +61,7 @@ export interface ProgramCreate {
   acceptedFiles?: string[]
   fields?: FieldDefinition[]
   cnnFilter?: string
+  tableCnn?: Record<string, string>
 }
 
 export interface FormFieldConfig {
